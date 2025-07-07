@@ -17,7 +17,12 @@ export class FolderController {
   async getFolders(
     @Req() req: Request & { user: any },
     @Query('parentId') parentId?: string,
+    @Query('all') all?: string,
   ) {
+    if (all === 'true') {
+      return this.folderService.getAllUserFolders(req.user.userId);
+    }
+    
     const { folders } = await this.folderService.getFolders(req.user.userId, parentId);
     
     // Get files for the current folder level

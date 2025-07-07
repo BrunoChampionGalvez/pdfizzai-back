@@ -1,4 +1,4 @@
-import { IsString, IsOptional } from 'class-validator';
+import { IsString, IsOptional, IsArray } from 'class-validator';
 
 export class CreateChatSessionDto {
   @IsOptional()
@@ -8,7 +8,22 @@ export class CreateChatSessionDto {
 
 export class SendMessageDto {
   @IsString()
-  message: string;
+  content: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  fileIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  folderIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  previousSessionsIds?: string[];
 }
 
 export class ChatReference {

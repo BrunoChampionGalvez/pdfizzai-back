@@ -1,8 +1,14 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { File } from './file.entity';
 
 export enum MessageRole {
   USER = 'user',
   ASSISTANT = 'assistant'
+}
+
+export interface FileCitation {
+  id: string;
+  text: string;
 }
 
 @Entity('chat_messages')
@@ -26,19 +32,16 @@ export class ChatMessage {
   @Column('text')
   content: string;
 
-  @Column({ nullable: true })
-  referenced_file_id: string;
-
   @ManyToOne('File', 'referencedMessages', { nullable: true })
   @JoinColumn({ name: 'referenced_file_id' })
-  referencedFile: any;
+  referencedFiles: File[];
 
-  @Column({ nullable: true })
-  referenced_page: number;
+  @Column({ type: 'text', nullable: true })
+  context: string; // Optional context for the message, e.g. search query or reference
 
-  @Column('text', { nullable: true })
-  referenced_text_snippet: string;
+  @Column({ type: 'jsonb', nullable: true })
+  citations: FileCitation[];
 
   @CreateDateColumn()
-  timestamp: Date;
+  created_at: Date;
 }

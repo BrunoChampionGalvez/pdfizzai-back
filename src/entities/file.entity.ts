@@ -1,14 +1,24 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, OneToMany, JoinColumn, UpdateDateColumn } from 'typeorm';
 import { User } from './user.entity';
 import { Folder } from './folder.entity';
+import { ChatMessage } from './chat-message.entity';
 
 @Entity('files')
 export class File {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column()
+  @Column({nullable: true})
   filename: string;
+
+  @Column({ type: 'text', nullable: true })
+  textByPages: string;
+
+  @Column({ type: 'boolean', default: false })
+  textExtracted: boolean;
+
+  @Column({ type: 'boolean', default: false })
+  processed: boolean;
 
   @Column()
   mime_type: string;
@@ -22,6 +32,15 @@ export class File {
   @ManyToOne(() => Folder, 'files', { nullable: true })
   @JoinColumn({ name: 'folder_id' })
   folder: Folder;
+
+  @Column({ type: 'text', nullable: true })
+  summary: string;
+
+  @Column({ type: 'text', array: true, nullable: true })
+  chunks: string[];
+
+  @Column()
+  originalName: string;
 
   @Column()
   owner_id: string;
@@ -37,5 +56,11 @@ export class File {
   storage_path: string;
 
   @OneToMany('ChatMessage', 'referencedFile')
-  referencedMessages: any[];
+  referencedMessages: ChatMessage[];
+
+  @CreateDateColumn({ name: 'created_at' })
+  created_at: Date;
+
+  @UpdateDateColumn({ name: 'updated_at' })
+  updated_at: Date;
 }

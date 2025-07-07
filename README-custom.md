@@ -1,6 +1,6 @@
-# Refery AI Backend
+# RefDoc AI Backend
 
-Backend API for Refery AI - an application for uploading PDFs and chatting with AI about their contents.
+Backend API for RefDoc AI - an application for uploading PDFs and chatting with AI about their contents.
 
 ## Technologies
 

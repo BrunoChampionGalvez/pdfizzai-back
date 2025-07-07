@@ -13,9 +13,18 @@ export class ChatSession {
   @JoinColumn({ name: 'user_id' })
   user: User;
 
+  @Column({ nullable: true })
+  name: string;
+
+  @Column({ default: false })
+  nameWasAiGenerated: boolean;
+
   @CreateDateColumn()
   created_at: Date;
 
   @OneToMany('ChatMessage', 'session')
   messages: any[];
+
+  @Column('text', { array: true, default: () => 'ARRAY[]::text[]' })
+  contextFileIds: string[]; // IDs of files used for context in this session
 }

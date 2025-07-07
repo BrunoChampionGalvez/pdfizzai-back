@@ -31,6 +31,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 
 // Guards
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { AIService } from './services/ai.service';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
         database: configService.get('DB_NAME', 'refery_ai'),
         entities: [User, Folder, File, ChatSession, ChatMessage],
         synchronize: configService.get('NODE_ENV') !== 'production',
+        dropSchema: false,
       }),
       inject: [ConfigService],
     }),
@@ -78,6 +80,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
     FileService,
     ChatService,
     JwtStrategy,
+    AIService,
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
