@@ -88,8 +88,8 @@ export class FileService {
       size_bytes: fileData.size,
       owner_id: userId,
       owner: { id: userId }, // Assuming you have a User entity with an id field
-      // Only set folderId if it's provided and not null
-      ...(folderId ? { folderId } : {}),
+      // Only set folder_id if it's provided and not null
+      ...(folderId ? { folder_id: folderId } : {}),
     });
 
     const savedFile = await this.fileRepository.save(file);
@@ -153,8 +153,7 @@ export class FileService {
   async getAllUserFiles(userId: string): Promise<File[]> {
     return this.fileRepository.find({
       where: { owner_id: userId },
-      select: ['id', 'filename', 'folder_id'],
-      order: { filename: 'ASC' },
+      order: { upload_date: 'DESC' },
     });
   }
 

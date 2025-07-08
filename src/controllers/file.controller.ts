@@ -125,4 +125,11 @@ export class FileController {
       res.status(500).json({ error: 'Failed to proxy PDF' });
     }
   }
+
+  @Get()
+  async getAllFiles(
+    @Req() req: Request & { user: any },
+  ) {
+    return this.fileService.getAllUserFiles(req.user.userId);
+  }
 }

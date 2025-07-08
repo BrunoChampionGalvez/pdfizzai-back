@@ -48,6 +48,7 @@ export class ChatService {
     previousSessionsIds: string[] = [],
     fileIds: string[] = [],
     folderIds: string[] = [],
+    selectedMaterials: any[] = [],
   ): AsyncGenerator<string> {
     // Get file contents variables we'll need regardless of try/catch flow
     let fileContents: Array<{
@@ -258,6 +259,7 @@ export class ChatService {
         content: content,
         session: session,
         session_id: sessionId, // Explicit assignment
+        selectedMaterials: selectedMaterials,
       });
 
       console.log(`Saving user message for session ${sessionId}`);
@@ -414,7 +416,7 @@ export class ChatService {
 
       // Create AI message with the final content and citations
       const aiMessage = this.chatMessageRepository.create({
-        role: MessageRole.ASSISTANT,
+        role: MessageRole.MODEL,
         content: finalContent,
         context: context,
         citations: finalCitations,
@@ -450,10 +452,15 @@ export class ChatService {
       throw new NotFoundException('Chat session not found');
     }
 
+    // Query messages with additional user verification through session
     return this.chatMessageRepository.find({
       where: { session_id: sessionId },
+      relations: ['session'],
       order: { created_at: 'ASC' },
-    });
+    }).then(messages => 
+      // Double-check that all messages belong to sessions owned by the correct user
+      messages.filter(message => message.session?.user_id === userId)
+    );
   }
 
   async getReferencePathById(
@@ -521,8 +528,10 @@ export class ChatService {
       if (!oldChatMessage) {
         throw new NotFoundException(`Chat message with ID ${chatMessageId} not found`);
       }
+      // Convert all new line characters in context to a single space
+      const normalizedContext = oldChatMessage.context.replace(/\r?\n|\r/g, ' ');
 
-      const response = await this.aiService.loadReferenceAgain(textToSearch, oldChatMessage.context);
+      const response = await this.aiService.loadReferenceAgain(textToSearch, normalizedContext);
       console.log(`AI search response: ${response}`);
       // Escape newlines in textToSearch for literal replacement
       const escapedTextToSearch = textToSearch.replace(/\n/g, '\\n');

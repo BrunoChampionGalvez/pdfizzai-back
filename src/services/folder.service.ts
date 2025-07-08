@@ -1,6 +1,6 @@
 import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, IsNull } from 'typeorm';
 import { Folder } from '../entities/folder.entity';
 import { CreateFolderDto } from '../dto/folder.dto';
 import { File } from 'src/entities';
@@ -91,21 +91,27 @@ export class FolderService {
   }
 
   async getFolders(userId: string, parentId?: string): Promise<{ folders: Folder[]; files: any[] }> {
-    const whereCondition: any = { owner_id: userId };
-    
-    if (parentId) {
-      whereCondition.parent_id = parentId;
-    } else {
-      whereCondition.parent_id = null;
-    }
-
+    // Get ALL folders for the user (for hierarchical tree display)
     const folders = await this.folderRepository.find({
-      where: whereCondition,
-      relations: ['files'],
+      where: { owner_id: userId },
+      order: { name: 'ASC' },
     });
 
-    // Get files for this folder level
-    const files = folders.length > 0 ? folders[0].files || [] : [];
+    // Get files for the specific folder level
+    let files: any[] = [];
+    if (parentId) {
+      // Get files in the specified folder
+      files = await this.fileRepository.find({
+        where: { folder_id: parentId },
+        order: { created_at: 'DESC' },
+      });
+    } else {
+      // Get files in root (no folder) - use IsNull for proper null handling
+      files = await this.fileRepository.find({
+        where: { folder_id: IsNull() },
+        order: { created_at: 'DESC' },
+      });
+    }
 
     return { folders, files };
   }

@@ -20,17 +20,7 @@ export class ChatController {
   @Post(':sessionId/message')
   async sendMessage(
     @Param('sessionId') sessionId: string, // Fixed parameter name to match route
-    @Body()
-    messageDto: {
-      content: string;
-      flashCardDeckIds?: string[];
-      quizIds?: string[];
-      previousSessionsIds?: string[];
-      fileIds?: string[];
-      folderIds?: string[];
-      courseId?: string;
-      thinkMode?: boolean;
-    },
+    @Body() messageDto: SendMessageDto,
     @Req() req: Request & { user: any },
     @Res() res: Response,
   ) {
@@ -76,11 +66,12 @@ export class ChatController {
         // Get the message generator from service
         const generator = this.chatService.sendMessage(
           sessionId, // Updated variable name
-          req.user.id,
+          req.user.userId,
           messageDto.content,
           messageDto.previousSessionsIds || [],
           messageDto.fileIds || [],
           messageDto.folderIds || [],
+          messageDto.selectedMaterials || [],
         );
 
         // Stream each chunk as it's generated
@@ -189,7 +180,7 @@ export class ChatController {
         body.textToSearch,
       );
       console.log(
-        `Search result for user ${req.user.id}: "${result.substring(0, 50)}..."`,
+        `Search result for user ${req.user.userId}: "${result.substring(0, 50)}..."`,
       );
       return result;
     } catch (error: unknown) {

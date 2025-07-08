@@ -24,6 +24,10 @@ export class SendMessageDto {
   @IsArray()
   @IsString({ each: true })
   previousSessionsIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  selectedMaterials?: any[];
 }
 
 export class ChatReference {

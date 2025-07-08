@@ -3,12 +3,19 @@ import { File } from './file.entity';
 
 export enum MessageRole {
   USER = 'user',
-  ASSISTANT = 'assistant'
+  MODEL = 'model'
 }
 
 export interface FileCitation {
   id: string;
   text: string;
+}
+
+export interface MentionedMaterial {
+  id: string;
+  displayName: string;
+  type: 'file' | 'folder';
+  originalName: string;
 }
 
 @Entity('chat_messages')
@@ -41,6 +48,9 @@ export class ChatMessage {
 
   @Column({ type: 'jsonb', nullable: true })
   citations: FileCitation[];
+
+  @Column({ type: 'jsonb', nullable: true })
+  selectedMaterials: MentionedMaterial[]; // Materials attached to the message
 
   @CreateDateColumn()
   created_at: Date;

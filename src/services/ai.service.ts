@@ -104,7 +104,7 @@ export class AIService {
           role:
             msg.role === MessageRole.USER
               ? ('user' as const)
-              : ('assistant' as const),
+              : ('model' as const),
           parts: [
             {
               text:
@@ -260,6 +260,8 @@ export class AIService {
       7. When referencing a text from a file, you must never include the title of the file, the authors, the departments, the university, the date of publication, or any metadata that is not part of the main content of the file.
 
       8. The text of each reference that you provide must be coherent and concise, but also complete. It must not correspond to multiple sections of the file, it should be self-contained. Meaning it contains enough information to be understood on it's own.
+
+      9. The text that you want to reference can be split by numerical references, that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc. You must always check if there is a numerical reference in the text that you want to reference, and if there is, you must only provide the longest part of the two parts of the text that was split by this numerical reference. If the numerical reference is at the start or end of the text you want to reference, you must remove it.
 
       NOTE: You can provide multiple references in a single response, but you must always open and close the reference tags ([REF] and [/REF]) for each reference. Each statement that you make, should be followed by the reference that you used to draw that statement.
     `;
@@ -480,17 +482,19 @@ export class AIService {
         config: {
           systemInstruction: `You have to do the following tasks in this exact order: 
 
-1.  Search for a specific text inside the Files context. The text you are searching for might not be an exact match to what is in the Files context. It could have minor variations in wording, characters, punctuation, or spacing.
+1. Search for a specific text inside the Files context. The text you are searching for might not be an exact match to what is in the Files context. It could have minor variations in wording, characters, punctuation, or spacing.
 
-2.  If you find the specific text, but it is split into two parts by other content (such as information that could have been extracted from a table, graph, or other unrelated text, or the [START_PAGE] and [END_PAGE] markers), you must identify both parts. After identifying both parts, you must return ONLY the longer of the two parts. Do not include the content that was in the middle.
+2. If you find the specific text, but it is split into two parts by other content (such as information that could have been extracted from a table, graph, or other unrelated text, or the [START_PAGE] and [END_PAGE] markers), you must identify both parts. After identifying both parts, you must return ONLY the longer of the two parts. Do not include the content that was in the middle.
 
-3.  If you find the specific text and it is not split, but contains minor variations (e.g., different punctuation, a few different words or characters), return it exactly as it appears in the Files context.
+3. If you find the specific text and it is not split, but contains minor variations (e.g., different punctuation, a few different words or characters), return it exactly as it appears in the Files context.
 
-4.  If you do not find the specific text in the Files context (neither whole, with minor variations, nor split), then you must return the specific text exactly as you received it.`,
+4. If you do not find the specific text in the Files context (neither whole, with minor variations, nor split), then you must return the specific text exactly as you received it.
+
+5. If you find the specific text, but it is split by numerical references (that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc), you must identify both parts. After identifying both parts, you must return ONLY the longer of the two parts. Do not include both parts, nor the numerical reference that was in the middle.`,
           temperature: 0.2,
           maxOutputTokens: 8000,
           thinkingConfig: {
-            thinkingBudget: 10000,
+            thinkingBudget: 15000,
           },
         },
       });
