@@ -86,11 +86,11 @@ export class ChatService {
         );
       }
 
-      if (session.nameWasAiGenerated === false) {
+      /*if (session.nameWasAiGenerated === false) {
         session.name = await this.aiService.generateSessionName(content);
         session.nameWasAiGenerated = true;
         await this.chatSessionRepository.save(session);
-      }
+      }*/
 
       console.log(
         `Processing message for session ${sessionId}, user ${userId}`,
@@ -206,7 +206,10 @@ export class ChatService {
                 .name,
               content: (result.fields as { name: string; chunk_text: string })
                 .chunk_text,
-            })),
+              userId: (result.fields as { userId: string }).userId,
+            })).filter((result) => {
+              return result.userId === userId;
+            }),
           ];
         } else {
           fileContents = [];
@@ -512,6 +515,7 @@ export class ChatService {
   }
 
   async loadReferenceAgain(
+    referenceId: string,
     chatMessageId: string,
     chatMessage: string,
     textToSearch: string,
@@ -520,16 +524,23 @@ export class ChatService {
     
     // Use AI service to search for the reference
     try {
-      const oldChatMessage = await this.chatMessageRepository.findOne({
+      /*const oldChatMessage = await this.chatMessageRepository.findOne({
         where: { id: chatMessageId },
         select: ['context'],
       });
 
       if (!oldChatMessage) {
         throw new NotFoundException(`Chat message with ID ${chatMessageId} not found`);
+      }*/
+
+      // Fetch the file of the reference
+      const file = await this.fileService.findOne(referenceId);
+      if (!file) {
+        throw new NotFoundException(`File with ID ${referenceId} not found`);
       }
+
       // Convert all new line characters in context to a single space
-      const normalizedContext = oldChatMessage.context.replace(/\r?\n|\r/g, ' ');
+      const normalizedContext = file.textByPages.replace(/\r?\n|\r/g, ' ');
 
       const response = await this.aiService.loadReferenceAgain(textToSearch, normalizedContext);
       console.log(`AI search response: ${response}`);

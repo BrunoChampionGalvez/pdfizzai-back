@@ -52,8 +52,14 @@ export class File {
   @CreateDateColumn()
   upload_date: Date;
 
-  @Column()
+  /*@Column({ type: 'text', nullable: true })
+  google_storage_url: string;*/
+
+  @Column({ type: 'text' })
   storage_path: string;
+
+  @Column({ nullable: true })
+  expires: number;
 
   @OneToMany('ChatMessage', 'referencedFile')
   referencedMessages: ChatMessage[];

@@ -1,9 +1,10 @@
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { Folder } from '../entities/folder.entity';
 import { CreateFolderDto } from '../dto/folder.dto';
 import { File } from 'src/entities';
+import { FileService } from './file.service';
 
 @Injectable()
 export class FolderService {
@@ -12,6 +13,8 @@ export class FolderService {
     private folderRepository: Repository<Folder>,
     @InjectRepository(File)
     private fileRepository: Repository<File>,
+    @Inject(forwardRef(() => FileService))
+    private fileService: FileService,
   ) {}
 
   /**
@@ -133,7 +136,51 @@ export class FolderService {
       throw new NotFoundException('Folder not found');
     }
 
-    await this.folderRepository.remove(folder);
+    // Recursively delete all contents of the folder
+    await this.deleteFolderRecursively(folderId, userId);
+  }
+
+  /**
+   * Recursively deletes a folder and all its contents (files and subfolders)
+   * @param folderId ID of the folder to delete
+   * @param userId ID of the user (for permission checking)
+   */
+  private async deleteFolderRecursively(folderId: string, userId: string): Promise<void> {
+    // First, get all child folders
+    const childFolders = await this.folderRepository.find({
+      where: { parent_id: folderId },
+    });
+
+    // Recursively delete all child folders first
+    for (const childFolder of childFolders) {
+      await this.deleteFolderRecursively(childFolder.id, userId);
+    }
+
+    // Delete all files in this folder
+    const filesInFolder = await this.fileRepository.find({
+      where: { folder_id: folderId },
+    });
+
+    for (const file of filesInFolder) {
+      // Use FileService to properly delete the file (including from storage)
+      try {
+        await this.fileService.deleteFile(userId, file.id);
+      } catch (error) {
+        // Log error but continue with deletion process
+        console.error(`Error deleting file ${file.id}:`, error);
+        // Fallback to just removing from database
+        await this.fileRepository.remove(file);
+      }
+    }
+
+    // Finally, delete the folder itself
+    const folder = await this.folderRepository.findOne({
+      where: { id: folderId, owner_id: userId },
+    });
+
+    if (folder) {
+      await this.folderRepository.remove(folder);
+    }
   }
 
   async getFolderById(userId: string, folderId: string): Promise<Folder> {

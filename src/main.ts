@@ -5,7 +5,13 @@ import * as cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    bodyParser: true,
+  });
+  
+  // Configure body parser limits for file uploads
+  app.use(require('express').json({ limit: '100mb' }));
+  app.use(require('express').urlencoded({ limit: '100mb', extended: true }));
   
   // Security
   app.use(helmet());

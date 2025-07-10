@@ -166,7 +166,7 @@ export class ChatController {
 
   @Post('load-reference-again/:messageId')
   async searchReferenceAgain(
-    @Body() body: { textToSearch: string, chatMessage: string },
+    @Body() body: { textToSearch: string, chatMessage: string, referenceId: string },
     @Req() req: Request & { user: any },
     @Param('messageId') messageId: string,
   ): Promise<string> {
@@ -175,6 +175,7 @@ export class ChatController {
     );
     try {
       const result = await this.chatService.loadReferenceAgain(
+        body.referenceId,
         messageId,
         body.chatMessage,
         body.textToSearch,

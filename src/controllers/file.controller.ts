@@ -31,23 +31,6 @@ export class FileController {
     return this.fileService.uploadFile(req.user.userId, file, folderId);
   }
 
-  @Get(':id/download')
-  async downloadFile(
-    @Req() req: Request & { user: any },
-    @Param('id') fileId: string,
-    @Res() res: Response,
-  ) {
-    const { stream, file } = await this.fileService.getFileStream(req.user.userId, fileId);
-    
-    res.set({
-      'Content-Type': file.mime_type,
-      'Content-Disposition': `inline; filename="${file.filename}"`,
-      'Content-Length': file.size_bytes,
-    });
-
-    stream.pipe(res);
-  }
-
   @Delete(':id')
   async deleteFile(
     @Req() req: Request & { user: any },

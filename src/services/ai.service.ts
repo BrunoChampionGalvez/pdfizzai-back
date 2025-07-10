@@ -259,7 +259,7 @@ export class AIService {
 
       7. When referencing a text from a file, you must never include the title of the file, the authors, the departments, the university, the date of publication, or any metadata that is not part of the main content of the file.
 
-      8. The text of each reference that you provide must be coherent and concise, but also complete. It must not correspond to multiple sections of the file, it should be self-contained. Meaning it contains enough information to be understood on it's own.
+      8. The text of each reference that you provide must be coherent and concise, but also complete. It must not correspond to multiple sections of the file, it should be self-contained. Meaning it contains enough information to be understood on it's own. The text of each reference must never be too long, that is, it must not exceed around 150 words. If you need to provide more information, you must split it into multiple references, each with a coherent text that is self-contained.
 
       9. The text that you want to reference can be split by numerical references, that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc. You must always check if there is a numerical reference in the text that you want to reference, and if there is, you must only provide the longest part of the two parts of the text that was split by this numerical reference. If the numerical reference is at the start or end of the text you want to reference, you must remove it.
 
@@ -283,25 +283,19 @@ export class AIService {
         model: this.geminiModels.flashLite,
         contents: prompt,
         config: {
-          systemInstruction: `You are a user query categorizer. The query comes from a university or college student that is studying for an exam or doing homework. Categorize the user query that you receive into one of the following categories: "GENERIC" and "SPECIFIC". Return ONLY the category text, nothing else.
+          systemInstruction: `You are a user query categorizer. Categorize the user query that you receive into one of the following categories: "GENERIC" and "SPECIFIC". Return ONLY the category text, nothing else.
           
           1. GENERIC: The user is asking a generic question that cannot be recognized as belonging to a specific topic whatsoever.
 
           Examples of a GENERIC query:
           "What are the main points treated in this file?"
-          "What are the main points treated in this flashcard deck?"
-          "What are the main points treated in this quiz?"
           "What is the hypothesis of this paper?"
           "What is the main idea of this file?"
           "What are the methods that were used in this article?"
           "What are the results of this paper?"
           "What are the conclusions of this research paper?"
           "Write a summary of this file."
-          "Write a summary of this flashcard deck."
-          "Write a summary of this quiz."
           "Write a summary of the file named "Sleep disorders and cancer incidence: examining duration and severity of diagnosis among veterans""
-          "Write a summary of the flashcard deck named "Psychology I""
-          "Write a summary of the quiz named "Politics II""
           "What are the names of the files in this course that talk about photosynthesis?"
 
           2. SPECIFIC: The user is asking a question that can be recognized as belonging to a specific topic.
@@ -365,6 +359,9 @@ export class AIService {
       query: {
         topK: topK,
         inputs: { text: query },
+        filter: {
+          userId: userId,
+        }
       },
       fields: ['chunk_text', 'fileId', 'name', 'userId'],
       /*...(lessThan250Words
@@ -458,7 +455,7 @@ export class AIService {
         contents: prompt,
         config: {
           systemInstruction:
-            'You are a file title extractor. Extract the title from the following text that you receive, that was originally extracted from a file. Return ONLY the title text, nothing else.',
+            'You are a file title extractor. Extract the title from the text that you receive, that was originally extracted from a file. Return ONLY the title text, nothing else. You will receive 1/4 of the text of the file, so you must focus on detecting the title of the original file from only that portion of the text that you receive.',
           temperature: 0.2,
         },
       });

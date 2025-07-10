@@ -10,11 +10,13 @@ import { ConfigService } from '@nestjs/config';
 import { AIService } from './ai.service';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { Folder } from 'src/entities';
+import { Storage } from '@google-cloud/storage';
 
 @Injectable()
 export class FileService {
   private readonly uploadPath = path.join(process.cwd(), 'uploads');
   private pc: Pinecone;
+  private googleStorage: Storage;
 
   constructor(
     private configService: ConfigService,
@@ -29,6 +31,9 @@ export class FileService {
     this.pc = new Pinecone({
       apiKey: this.configService.get('PINECONE_API_KEY') as string,
     });
+    this.googleStorage = new Storage({
+      apiKey: this.configService.get('GCS_API_KEY') as string,
+    });
   }
 
   async findOne(id: string): Promise<File> {
@@ -39,7 +44,23 @@ export class FileService {
       throw new NotFoundException(`File with ID ${id} not found`);
     }
 
+    /*if (!file.google_storage_url || file.expires || Date.now() > file.expires - 300000) {
+      // expired or within 5 min of expiry
+      const newSig = await this.generateUrl(file.filename);
+      file.google_storage_url = newSig.url;
+      file.expires = newSig.expires;
+      await this.fileRepository.save(file);
+    }*/
+
     return file;
+  }
+
+  async generateUrl(fileName, ttlSec = 3600) {
+    const [url] = await this.googleStorage
+      .bucket(this.configService.get('GCS_BUCKET_NAME') as string)
+      .file(fileName)
+      .getSignedUrl({ version: 'v4', action: 'read', expires: Date.now() + ttlSec * 1000 });
+    return { url, expires: Date.now() + ttlSec * 1000 };
   }
 
   async uploadFile(
@@ -57,12 +78,20 @@ export class FileService {
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }
-    const filePath = `${uploadsDir}/${Date.now()}_${fileData.originalname}`;
+    const filePath = `${userId}_${Date.now()}_${fileData.originalname}`;
     fs.writeFileSync(filePath, fileData.buffer);
     const virtualPath = filePath;
 
+    try {
+      const response = await this.googleStorage.bucket(this.configService.get('GCS_BUCKET_NAME') as string).upload(virtualPath);
+      console.log('File uploaded to Google Cloud Storage:', response);
+    } catch (error) {
+      console.error('Error uploading file to Google Cloud Storage:', error);
+      throw new BadRequestException('Failed to upload file to cloud storage');
+    }
+
     // Upload the file to Google Cloud Storage
-    await axios.post(
+    /*await axios.post(
       `https://storage.googleapis.com/upload/storage/v1/b/${this.configService.get('GCS_BUCKET_NAME')}/o?uploadType=media&name=${encodeURIComponent(virtualPath)}`,
       fileData.buffer, // send the binary data directly
       {
@@ -71,7 +100,7 @@ export class FileService {
         'Content-Type': fileData.mimetype,
       },
       },
-    );
+    );*/
 
     // Delete the file from the uploads directory after upload
     try {
@@ -92,6 +121,10 @@ export class FileService {
       ...(folderId ? { folder_id: folderId } : {}),
     });
 
+    /*const newSig = await this.generateUrl(virtualPath);
+    file.google_storage_url = newSig.url;
+    file.expires = newSig.expires;*/
+
     const savedFile = await this.fileRepository.save(file);
 
     return savedFile;
@@ -110,32 +143,19 @@ export class FileService {
   }
 
   async deleteFile(userId: string, fileId: string): Promise<void> {
-    const file = await this.fileRepository.findOne({
-      where: { id: fileId, owner_id: userId },
-    });
+    const file = await this.findOne(fileId);
 
     if (!file) {
-      throw new NotFoundException('File not found');
+      throw new NotFoundException(`File with ID ${fileId} not found`);
     }
-
-    // Delete file from disk
-    if (fs.existsSync(file.storage_path)) {
-      fs.unlinkSync(file.storage_path);
-    }
-
-    // Delete file record
-    await this.fileRepository.remove(file);
-  }
-
-  async getFileStream(userId: string, fileId: string): Promise<{ stream: fs.ReadStream; file: File }> {
-    const file = await this.getFileById(userId, fileId);
     
-    if (!fs.existsSync(file.storage_path)) {
-      throw new NotFoundException('File not found on disk');
-    }
+    const index = this.pc.index(this.configService.get('PINECONE_INDEX_NAME') as string, this.configService.get('PINECONE_INDEX_HOST') as string);
+    const ns = index.namespace(userId)
 
-    const stream = fs.createReadStream(file.storage_path);
-    return { stream, file };
+    await ns.deleteMany({
+      fileId: { $eq: file.id  },
+    });
+    await this.fileRepository.remove(file);
   }
 
   async getFilesByFolderId(userId: string, folderId: string): Promise<File[]> {
@@ -185,24 +205,29 @@ export class FileService {
     }
 
     // Generate summary
-    const summary = await this.aiService.generateSummary(textByPages);
+    //const summary = await this.aiService.generateSummary(textByPages);
 
     const chunks = this.createChunksWithOverlap(textByPages);
 
     // Create file name with AI
+    const quarterLength = Math.floor(textByPages.length / 4);
     const fileName = await this.aiService.generateFileName(
-      textByPages,
+      textByPages.slice(0, quarterLength),
     );
 
     // Update the paper with extracted text and mark as extracted
     let updatedPaper = await this.fileRepository.save({
       ...paper,
       textByPages,
-      summary,
+      //summary,
       chunks,
       filename: fileName,
       processed: true, // Mark as processed since we've extracted the content
-      textExtracted: true
+      textExtracted: true,
+      storage_path: paper.storage_path,
+      originalName: paper.originalName,
+      mime_type: paper.mime_type,
+      size_bytes: paper.size_bytes
     });
 
     // Upsert text

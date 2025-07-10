@@ -29,24 +29,26 @@ export class FileController {
     @UploadedFile() file: Express.Multer.File,
     @Body('folderId') folderId?: string,
   ) {
-    return this.fileService.uploadFile(req.user.userId, file, folderId);
-  }
-
-  @Get(':id/download')
-  async downloadFile(
-    @Req() req: Request & { user: any },
-    @Param('id') fileId: string,
-    @Res() res: Response,
-  ) {
-    const { stream, file } = await this.fileService.getFileStream(req.user.userId, fileId);
-    
-    res.set({
-      'Content-Type': file.mime_type,
-      'Content-Disposition': `inline; filename="${file.filename}"`,
-      'Content-Length': file.size_bytes,
+    console.log('Backend: File upload request received');
+    console.log('Backend: File details:', {
+      originalname: file?.originalname,
+      mimetype: file?.mimetype,
+      size: file?.size,
+      userId: req.user?.userId,
+      folderId
     });
-
-    stream.pipe(res);
+    
+    const result = await this.fileService.uploadFile(req.user.userId, file, folderId);
+    
+    console.log('Backend: Upload result:', {
+      id: result.id,
+      originalName: result.originalName,
+      storage_path: result.storage_path,
+      mime_type: result.mime_type,
+      size_bytes: result.size_bytes
+    });
+    
+    return result;
   }
 
   @Get('pdf-proxy')
@@ -139,6 +141,16 @@ export class FileController {
     @Req() req: Request & { user: any },
     @Param('id') fileId: string,
   ) {
-    return this.fileService.getFileById(req.user.userId, fileId);
+    console.log(`Backend: Getting file ${fileId} for user ${req.user.userId}`);
+    const result = await this.fileService.getFileById(req.user.userId, fileId);
+    console.log('Backend: File details retrieved:', {
+      id: result.id,
+      originalName: result.originalName,
+      storage_path: result.storage_path,
+      mime_type: result.mime_type,
+      textExtracted: result.textExtracted,
+      processed: result.processed
+    });
+    return result;
   }
 }
