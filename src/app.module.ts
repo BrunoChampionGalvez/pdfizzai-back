@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
@@ -19,19 +19,29 @@ import { AuthService } from './services/auth.service';
 import { FolderService } from './services/folder.service';
 import { FileService } from './services/file.service';
 import { ChatService } from './services/chat.service';
+import { AIService } from './services/ai.service';
+import { IPWhitelistService } from './services/ip-whitelist.service';
 
 // Controllers
 import { AuthController } from './controllers/auth.controller';
 import { FolderController } from './controllers/folder.controller';
 import { FileController } from './controllers/files.controller';
 import { ChatController } from './controllers/chat.controller';
+import { WebhooksController } from './controllers/webhooks.controller';
 
 // Strategies
 import { JwtStrategy } from './strategies/jwt.strategy';
 
 // Guards
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { AIService } from './services/ai.service';
+
+// Middleware
+import { IPWhitelistMiddleware } from './middleware/ip-whitelist.middleware';
+import { WebhooksService } from './services/webhooks.service';
+import { Subscription } from './entities/subscription.entity';
+import { Transaction } from './entities/transaction.entity';
+import { PaymentService } from './services/payment.service';
+import { PaymentController } from './controllers/payment.controller';
 
 @Module({
   imports: [
@@ -47,13 +57,13 @@ import { AIService } from './services/ai.service';
         username: configService.get('DB_USERNAME', 'postgres'),
         password: configService.get('DB_PASSWORD', 'password'),
         database: configService.get('DB_NAME', 'refery_ai'),
-        entities: [User, Folder, File, ChatSession, ChatMessage],
+        entities: [User, Folder, File, ChatSession, ChatMessage, Subscription, Transaction],
         synchronize: configService.get('NODE_ENV') !== 'production',
         dropSchema: false,
       }),
       inject: [ConfigService],
     }),
-    TypeOrmModule.forFeature([User, Folder, File, ChatSession, ChatMessage]),
+    TypeOrmModule.forFeature([User, Folder, File, ChatSession, ChatMessage, Subscription, Transaction]),
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -73,6 +83,8 @@ import { AIService } from './services/ai.service';
     FolderController,
     FileController,
     ChatController,
+    WebhooksController,
+    PaymentController,
   ],
   providers: [
     AuthService,
@@ -81,10 +93,19 @@ import { AIService } from './services/ai.service';
     ChatService,
     JwtStrategy,
     AIService,
+    IPWhitelistService,
+    WebhooksService,
+    PaymentService,
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
     },
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply(IPWhitelistMiddleware)
+      .forRoutes('*'); // Apply to all routes
+  }
+}

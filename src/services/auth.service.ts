@@ -15,7 +15,7 @@ export class AuthService {
   ) {}
 
   async signup(signupDto: SignupDto): Promise<{ user: Partial<User>; token: string }> {
-    const { email, password } = signupDto;
+    const { email, password, name, country } = signupDto;
     
     // Check if user already exists
     const existingUser = await this.userRepository.findOne({ where: { email } });
@@ -31,6 +31,8 @@ export class AuthService {
     const user = this.userRepository.create({
       email,
       password_hash,
+      name,
+      country,
     });
 
     const savedUser = await this.userRepository.save(user);
@@ -40,7 +42,7 @@ export class AuthService {
     const token = this.jwtService.sign(payload);
 
     return {
-      user: { id: savedUser.id, email: savedUser.email },
+      user: { id: savedUser.id, email: savedUser.email, name: savedUser.name, country: savedUser.country },
       token,
     };
   }
@@ -65,7 +67,7 @@ export class AuthService {
     const token = this.jwtService.sign(payload);
 
     return {
-      user: { id: user.id, email: user.email },
+      user: { id: user.id, email: user.email, name: user.name, country: user.country },
       token,
     };
   }

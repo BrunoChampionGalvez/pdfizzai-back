@@ -48,6 +48,6 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   async getMe(@Req() req: Request & { user: any }) {
     const user = await this.authService.validateUser(req.user.userId);
-    return { id: user.id, email: user.email };
+    return { id: user.id, email: user.email, name: user.name, country: user.country };
   }
 }

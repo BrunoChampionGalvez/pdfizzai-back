@@ -7,6 +7,14 @@ export class SignupDto {
   @IsString()
   @MinLength(6)
   password: string;
+
+  @IsString()
+  @MinLength(1)
+  name: string;
+
+  @IsString()
+  @MinLength(2)
+  country: string;
 }
 
 export class LoginDto {
