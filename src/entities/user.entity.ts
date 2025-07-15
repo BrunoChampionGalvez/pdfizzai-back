@@ -34,9 +34,9 @@ export class User {
   @OneToMany('ChatSession', 'user')
   chatSessions: any[];
 
-  @OneToMany(() => Subscription, subscription => subscription.user)
+  @OneToMany(() => Subscription, subscription => subscription.user, { nullable: true })
   subscriptions: Subscription[];
 
-  @OneToMany(() => Transaction, transaction => transaction.user)
+  @OneToMany(() => Transaction, transaction => transaction.user, { nullable: true })
   transactions: Transaction[];
 }

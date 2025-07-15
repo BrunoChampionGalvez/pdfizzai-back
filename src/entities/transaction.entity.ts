@@ -12,29 +12,29 @@ export class Transaction {
     @PrimaryGeneratedColumn('uuid')
     id: string;
 
-    @Column()
+    @Column({ nullable: true })
     paddleTransactionId: string;
 
-    @Column()
+    @Column({ nullable: true })
     paddleSubscriptionId: string;
 
-    @Column()
+    @Column({ nullable: true })
     amount: string;
 
-    @Column()
+    @Column({ nullable: true })
     currency: string;
 
-    @Column()
+    @Column({ nullable: true })
     paddleCustomerId: string;
 
-    @Column({ type: 'enum', enum: TransactionStatus })
+    @Column({ type: 'enum', enum: TransactionStatus, nullable: true })
     status: TransactionStatus.CAPTURED | TransactionStatus.ERROR;
 
-    @ManyToOne(() => User, user => user.transactions)
+    @ManyToOne(() => User, user => user.transactions, { nullable: true })
     @JoinColumn({ name: 'userId' })
     user: User;
 
-    @ManyToOne(() => Subscription, subscription => subscription.transactions)
+    @ManyToOne(() => Subscription, subscription => subscription.transactions, { nullable: true })
     @JoinColumn({ name: 'subscriptionId' })
     subscription: Subscription;
 

@@ -1,13 +1,17 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { PaymentService } from "./payment.service";
 
 @Injectable()
 export class WebhooksService {
+    private readonly logger = new Logger(WebhooksService.name);
+
     constructor(
         private readonly paymentService: PaymentService,
     ) {}
 
     async handlePaddleWebhook(payload: any): Promise<string> {
+        this.logger.log(`Received webhook event: ${payload.event_type}`);
+        
         switch (payload.event_type) {
             case 'subscription.created':
                 // Handle subscription created event
@@ -23,10 +27,8 @@ export class WebhooksService {
                 return this.paymentService.subscriptionCanceled(payload);
             default:
                 // Handle unknown event type
-                console.warn(`Unhandled event type: ${payload.event_type}`);
+                this.logger.warn(`Unhandled event type: ${payload.event_type}`);
                 return 'Unknown event type';
-    }
-
-        return 'Webhook handled successfully';
+        }
     }
 }

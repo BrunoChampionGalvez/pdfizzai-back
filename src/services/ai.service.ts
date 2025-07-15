@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException } from "@nestjs/common";
+import { Injectable, InternalServerErrorException, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Pinecone, SearchRecordsResponseResult } from "@pinecone-database/pinecone";
 import { join } from 'path';
@@ -6,6 +6,7 @@ import { ChatMessage, MessageRole } from "src/entities";
 
 @Injectable()
 export class AIService {
+  private readonly logger = new Logger(AIService.name);
   private gemini: any;
   private geminiModels: {
     pro: string,
@@ -39,11 +40,11 @@ export class AIService {
 
   async onModuleInit() {
     try {
-      console.log('Attempting to initialize Google Gemini AI');
+      this.logger.log('Attempting to initialize Google Gemini AI');
 
       // Try to dynamically import the ES module
       const genAIModule = await import('@google/genai');
-      console.log('Successfully imported @google/genai module');
+      this.logger.log('Successfully imported @google/genai module');
 
       const apiKey = this.configService.get('GEMINI_API_KEY');
       if (!apiKey) {
@@ -53,11 +54,11 @@ export class AIService {
       this.gemini = new genAIModule.GoogleGenAI({ apiKey });
       this._Type = genAIModule.Type;
 
-      console.log('Successfully initialized Google Gemini AI');
+      this.logger.log('Successfully initialized Google Gemini AI');
     } catch (error) {
       // If any error occurs during initialization, create a mock implementation
       // instead of crashing the application
-      console.error('Failed to initialize Google Gemini AI:', error);
+      this.logger.error('Failed to initialize Google Gemini AI:', error);
       console.warn(
         'AI service will run in DISABLED mode - AI features will return empty results',
       );
@@ -95,7 +96,7 @@ export class AIService {
     context: string,
   ): AsyncGenerator<string, void, unknown> {
     try {
-      console.log('🔄 AI Service: Starting generateChatResponse');
+      this.logger.debug('Starting generateChatResponse');
 
       const systemPrompt = this.buildSystemPrompt();
 
@@ -114,10 +115,8 @@ export class AIService {
         })),
       ];
 
-      console.log(
-        '🚀 AI Service: Calling Gemini API with',
-        formattedMessages.length,
-        'messages',
+      this.logger.debug(
+        `Calling Gemini API with ${formattedMessages.length} messages`,
       );
 
       const response = await this.gemini.models.generateContentStream({
@@ -139,15 +138,15 @@ export class AIService {
 
       for await (const chunk of response) {
         chunkCount++;
-        console.log(`📦 AI Service: Processing chunk ${chunkCount}`);
+        this.logger.verbose(`Processing chunk ${chunkCount}`);
 
         if (chunk.candidates && chunk.candidates[0]) {
           const candidate = chunk.candidates[0];
-          console.log('✅ AI Service: Chunk has candidates');
+          this.logger.verbose('Chunk has candidates');
 
           if (candidate.content && candidate.content.parts) {
-            console.log(
-              `📝 AI Service: Chunk has ${candidate.content.parts.length} parts`,
+            this.logger.verbose(
+              `Chunk has ${candidate.content.parts.length} parts`,
             );
 
             for (let i = 0; i < candidate.content.parts.length; i++) {
@@ -155,62 +154,61 @@ export class AIService {
 
               if (part.text) {
                 const chunkText = part.text;
-                console.log(
-                  `🔤 AI Service: Part ${i} text length: ${chunkText.length}`,
+                this.logger.verbose(
+                  `Part ${i} text length: ${chunkText.length}`,
                 );
-                console.log(`🔤 AI Service: Part ${i} text: "${chunkText}"`);
+                this.logger.verbose(`Part ${i} text: "${chunkText.substring(0, 100)}..."`);
 
                 totalYielded += chunkText;
-                console.log(
-                  `📊 AI Service: Total yielded so far: ${totalYielded.length} chars`,
+                this.logger.verbose(
+                  `Total yielded so far: ${totalYielded.length} chars`,
                 );
 
                 yield chunkText;
-                console.log(
-                  `✅ AI Service: Yielded chunk part ${i} of chunk ${chunkCount}`,
+                this.logger.verbose(
+                  `Yielded chunk part ${i} of chunk ${chunkCount}`,
                 );
               } else {
-                console.log(`⚠️ AI Service: Part ${i} has no text`);
+                this.logger.warn(`Part ${i} has no text`);
               }
             }
           } else {
-            console.log(
-              '⚠️ AI Service: Chunk candidate has no content or parts',
+            this.logger.warn(
+              'Chunk candidate has no content or parts',
             );
           }
         } else {
-          console.log('⚠️ AI Service: Chunk has no candidates');
+          this.logger.warn('Chunk has no candidates');
         }
       }
 
-      console.log(
-        `🏁 AI Service: Finished streaming. Total chunks: ${chunkCount}, Total text: ${totalYielded.length} chars`,
+      this.logger.debug(
+        `Finished streaming. Total chunks: ${chunkCount}, Total text: ${totalYielded.length} chars`,
       );
-      console.log(
-        `📄 AI Service: Final complete text preview: "${totalYielded}"`,
+      this.logger.verbose(
+        `Final complete text preview: "${totalYielded.substring(0, 200)}..."`,
       );
     } catch (error: unknown) {
-      const consolePrefix = '❌ AI Service: Error in generateChatResponse';
       const yieldPrefix = 'Sorry, I encountered an error';
       let yieldMessage = `${yieldPrefix}: An unexpected error occurred.`;
 
       if (error instanceof Error) {
         const specificMessage = error.message;
-        console.error(`${consolePrefix}: ${specificMessage}`);
+        this.logger.error(`Error in generateChatResponse: ${specificMessage}`, error.stack);
         yieldMessage = `${yieldPrefix}: ${specificMessage}`;
       } else if (typeof error === 'string') {
-        console.error(`${consolePrefix}: ${error}`);
+        this.logger.error(`Error in generateChatResponse: ${error}`);
         yieldMessage = `${yieldPrefix}: ${error}`;
       } else if (
         error &&
         typeof (error as { message?: unknown }).message === 'string'
       ) {
         const specificMessage = (error as { message: string }).message;
-        console.error(`${consolePrefix}: ${specificMessage}`);
+        this.logger.error(`Error in generateChatResponse: ${specificMessage}`);
         yieldMessage = `${yieldPrefix}: ${specificMessage}`;
       } else {
-        console.error(
-          `${consolePrefix}: An unexpected error object was caught. Original error:`,
+        this.logger.error(
+          'An unexpected error object was caught in generateChatResponse',
           error,
         );
         // yieldMessage remains the generic one

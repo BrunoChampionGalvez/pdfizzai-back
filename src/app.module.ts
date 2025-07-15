@@ -4,7 +4,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ThrottlerModule } from '@nestjs/throttler';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard } from '@nestjs/throttler';
 
 // Entities
@@ -37,11 +37,17 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 // Middleware
 import { IPWhitelistMiddleware } from './middleware/ip-whitelist.middleware';
+import { LoggingMiddleware } from './middleware/logging.middleware';
 import { WebhooksService } from './services/webhooks.service';
+
+// Interceptors
+import { LoggingInterceptor } from './interceptors/logging.interceptor';
 import { Subscription } from './entities/subscription.entity';
 import { Transaction } from './entities/transaction.entity';
 import { PaymentService } from './services/payment.service';
 import { PaymentController } from './controllers/payment.controller';
+import { SubscriptionUsage } from './entities/subscription-usage.entity';
+import { SubscriptionPlan } from './entities/subscription-plan.entity';
 
 @Module({
   imports: [
@@ -57,13 +63,13 @@ import { PaymentController } from './controllers/payment.controller';
         username: configService.get('DB_USERNAME', 'postgres'),
         password: configService.get('DB_PASSWORD', 'password'),
         database: configService.get('DB_NAME', 'refery_ai'),
-        entities: [User, Folder, File, ChatSession, ChatMessage, Subscription, Transaction],
+        entities: [User, Folder, File, ChatSession, ChatMessage, Subscription, Transaction, SubscriptionUsage, SubscriptionPlan],
         synchronize: configService.get('NODE_ENV') !== 'production',
         dropSchema: false,
       }),
       inject: [ConfigService],
     }),
-    TypeOrmModule.forFeature([User, Folder, File, ChatSession, ChatMessage, Subscription, Transaction]),
+    TypeOrmModule.forFeature([User, Folder, File, ChatSession, ChatMessage, Subscription, Transaction, SubscriptionUsage, SubscriptionPlan]),
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -100,10 +106,18 @@ import { PaymentController } from './controllers/payment.controller';
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
     },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: LoggingInterceptor,
+    },
   ],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply(LoggingMiddleware)
+      .forRoutes('*'); // Apply logging to all routes first
+    
     consumer
       .apply(IPWhitelistMiddleware)
       .forRoutes('*'); // Apply to all routes

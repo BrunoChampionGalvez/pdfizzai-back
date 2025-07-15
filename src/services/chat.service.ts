@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, UnauthorizedException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ChatSession } from '../entities/chat-session.entity';
@@ -10,6 +10,8 @@ import { FolderService } from './folder.service';
 
 @Injectable()
 export class ChatService {
+  private readonly logger = new Logger(ChatService.name);
+
   constructor(
     @InjectRepository(ChatSession)
     private chatSessionRepository: Repository<ChatSession>,
@@ -243,7 +245,7 @@ export class ChatService {
               .join('\n\n')
           : 'No files context provided for this message';
 
-      console.log('📝 Chat Service: Converted content arrays to strings');
+      this.logger.debug('Converted content arrays to strings');
       console.log(
         `📊 Chat Service: fileContentsStr length: ${fileContentsStr.length}`,
       );
@@ -265,7 +267,7 @@ export class ChatService {
         selectedMaterials: selectedMaterials,
       });
 
-      console.log(`Saving user message for session ${sessionId}`);
+      this.logger.debug(`Saving user message for session ${sessionId}`);
       await this.chatMessageRepository.save(userMessage);
 
       // Double-check that the message was saved with the correct sessionId
