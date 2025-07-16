@@ -7,6 +7,7 @@ import { CreateChatSessionDto, SendMessageDto, ChatResponseDto, ChatReference } 
 import { AIService } from './ai.service';
 import { FileService } from './file.service';
 import { FolderService } from './folder.service';
+import { PaymentService } from './payment.service';
 
 @Injectable()
 export class ChatService {
@@ -20,6 +21,7 @@ export class ChatService {
     private readonly aiService: AIService,
     private readonly fileService: FileService,
     private readonly folderService: FolderService,
+    private readonly paymentService: PaymentService, // Assuming you have a PaymentService to handle subscription logic
   ) {}
 
   async findSessionById(id: string, userId: string): Promise<ChatSession> {
@@ -419,6 +421,10 @@ export class ChatService {
         (c) => c !== null,
       );
 
+      const subscriptionUsage = await this.paymentService.getSubscriptionUsageByUser(
+        userId,
+      );
+
       // Create AI message with the final content and citations
       const aiMessage = this.chatMessageRepository.create({
         role: MessageRole.MODEL,
@@ -433,6 +439,11 @@ export class ChatService {
       console.log(
         `✅ Chat Service: Successfully saved AI message with ID: ${aiMessage.id}`,
       );
+
+      await this.paymentService.increaseMessageUsage(
+        subscriptionUsage?.id,
+      );
+
 
       // Update session with new context file IDs
       if (sessionContext.contextFileIds.length > 0) {

@@ -15,8 +15,11 @@ export class SubscriptionUsage {
     @Column({ type: 'timestamp' })
     endsAt: Date;
 
-    @Column({ type: 'int' })
+    @Column({ type: 'int', default: 0 })
     messagesUsed: number;
+
+    @Column({ type: 'int', default: 0 })
+    filesUploaded: number;
 
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     createdAt: Date;

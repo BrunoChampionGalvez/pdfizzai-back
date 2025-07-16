@@ -19,7 +19,7 @@ export class Transaction {
     paddleSubscriptionId: string;
 
     @Column({ nullable: true })
-    amount: string;
+    amount: number;
 
     @Column({ nullable: true })
     currency: string;

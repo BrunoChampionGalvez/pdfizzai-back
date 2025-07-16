@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Subscription as dbSubscription } from "src/entities/subscription.entity";
 import { Transaction, TransactionStatus } from "src/entities/transaction.entity";
@@ -9,6 +9,7 @@ import { SubscriptionUsage } from "src/entities/subscription-usage.entity";
 import { Paddle } from "@paddle/paddle-node-sdk";
 import { ConfigService } from "@nestjs/config";
 import { Environment, Subscription } from "@paddle/paddle-node-sdk";
+import { SubscriptionPlan } from "src/entities/subscription-plan.entity";
 
 @Injectable()
 export class PaymentService {
@@ -22,6 +23,8 @@ export class PaymentService {
         private readonly userRepository: Repository<User>,
         @InjectRepository(SubscriptionUsage)
         private readonly subscriptionUsageRepository: Repository<SubscriptionUsage>,
+        @InjectRepository(SubscriptionPlan)
+        private readonly subscriptionPlanRepository: Repository<SubscriptionPlan>,
         private configService: ConfigService
     ) {
         this.paddle = new Paddle(this.configService.get('PADDLE_API_KEY') as string, {
@@ -30,15 +33,86 @@ export class PaymentService {
 
     }
 
-
-    async getSubscriptionById(paddleId: string): Promise<Subscription | null> {
+    async getPaddleSubscriptionById(paddleId: string): Promise<Subscription | null> {
         return await this.paddle.subscriptions.get(paddleId)
+    }
+
+    async getDbSubscriptionById(subscriptionId: string): Promise< dbSubscription | null> {
+        return await this.subscriptionRepository.findOne({
+            where: {
+                id: subscriptionId
+            },
+        });
+    }
+
+    async getSubscriptionUsageById(subscriptionId: string): Promise<SubscriptionUsage | null> {
+        return await this.subscriptionUsageRepository.findOne({
+            where: {
+                subscription: { id: subscriptionId }
+            },
+        });
+    }
+
+    async getUserSubscription(userId: string): Promise<dbSubscription | null> {
+        return await this.subscriptionRepository.findOne({
+            where: {
+                user: { id: userId }
+            },
+            relations: ['plan', 'user'],
+            order: { createdAt: 'DESC' } // Get the most recent subscription
+        });
+    }
+
+    async getUserSubscriptionUsage(userId: string): Promise<SubscriptionUsage | null> {
+        return await this.subscriptionUsageRepository.findOne({
+            where: {
+                subscription: { user: { id: userId } }
+            },
+            relations: ['subscription'],
+            order: { createdAt: 'DESC' } // Get the most recent usage record
+        });
+    }
+
+    async getUserFilesCount(userId: string): Promise<{ totalFiles: number }> {
+        // We need to inject the File repository for this
+        // For now, let's use the entity manager to query
+        const result = await this.subscriptionRepository.manager.query(
+            'SELECT COUNT(*) as total_files FROM files WHERE owner_id = $1',
+            [userId]
+        );
+        
+        return { totalFiles: parseInt(result[0]?.total_files || '0', 10) };
+    }
+
+    async getSubscriptionPlanById(subscriptionId: string): Promise<any> {
+        const subscription = await this.subscriptionPlanRepository.findOne({
+            where: {
+                subscriptions: {
+                    id: subscriptionId 
+                }
+            },
+        });
+
+        if (!subscription) {
+            return null;
+        }
+
+        return subscription;
     }
 
     async subscriptionCreated(payload: any): Promise<string> {
         const user = await this.userRepository.findOne({
             where: { id: payload.data.custom_data.userId }
         });
+
+        if (!user) {
+            throw new NotFoundException('User not found');
+        }
+
+        const subscriptionPlan = await this.subscriptionPlanRepository.findOne({
+            where: { name: payload.data.custom_data.planName }
+        });
+
         const newSubscription = this.subscriptionRepository.create({
             paddleSubscriptionId: payload.data.id,
             status: payload.data.status,
@@ -57,6 +131,7 @@ export class PaymentService {
             name: payload.data.custom_data.planName,
             hasTrialPeriod: payload.data.custom_data.isTrial || false,
             paddleCustomerId: payload.data.customer_id,
+            plan: subscriptionPlan || undefined,
         })
 
         await this.subscriptionRepository.save(newSubscription);
@@ -121,6 +196,7 @@ export class PaymentService {
                 startsAt: new Date(payload.data.billing_period.starts_at),
                 endsAt: new Date(payload.data.billing_period.ends_at),
                 messagesUsed: 0, // Initialize messages used to 0
+                filesUploaded: 0, // Initialize files uploaded to 0
             });
 
             await this.subscriptionUsageRepository.save(subscriptionUsage);
@@ -167,6 +243,7 @@ export class PaymentService {
         }
 
         subscription.status = 'canceled';
+        subscription.hasFullAccess = false;
 
         await this.subscriptionRepository.save(subscription);
 
@@ -183,11 +260,35 @@ export class PaymentService {
         });
 
         if (subscription) {
-            subscription.status = 'canceled';
-            subscription.hasFullAccess = false;
+            subscription.scheduledCancel = true;
             await this.subscriptionRepository.save(subscription);
         }
 
         return true;
+    }
+
+    async getSubscriptionUsageByUser(userId: string): Promise<SubscriptionUsage | null> {
+        return await this.subscriptionUsageRepository.findOne({
+            where: {
+                subscription: { user: { id: userId } }
+            },
+            relations: ['subscription'],
+            order: { createdAt: 'DESC' } // Get the most recent usage record
+        });
+    }
+
+    async increaseMessageUsage(subscriptionUsageId: string | undefined): Promise<void> {
+        if (!subscriptionUsageId) return;
+
+        const subscriptionUsage = await this.subscriptionUsageRepository.findOne({
+            where: { id: subscriptionUsageId }
+        });
+
+        if (!subscriptionUsage) {
+            throw new NotFoundException('Subscription usage not found');
+        }
+
+        subscriptionUsage.messagesUsed += 1;
+        await this.subscriptionUsageRepository.save(subscriptionUsage);
     }
 }

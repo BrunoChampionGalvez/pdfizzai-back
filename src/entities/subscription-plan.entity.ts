@@ -1,4 +1,5 @@
-import { Column, Entity, PrimaryGeneratedColumn } from "typeorm";
+import { Column, Entity, OneToMany, PrimaryGeneratedColumn } from "typeorm";
+import { Subscription } from "./subscription.entity";
 
 @Entity('subscription_plans')
 export class SubscriptionPlan {
@@ -31,6 +32,9 @@ export class SubscriptionPlan {
 
     @Column()
     trialFilesLimit: number; // Limit on the number of trial files
+
+    @OneToMany(() => Subscription, subscription => subscription.plan, { nullable: true })
+    subscriptions: Subscription[];
 
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     createdAt: Date;

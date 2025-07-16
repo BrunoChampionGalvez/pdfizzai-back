@@ -11,6 +11,7 @@ import { AIService } from './ai.service';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { Folder } from 'src/entities';
 import { Storage } from '@google-cloud/storage';
+import { SubscriptionUsage } from 'src/entities/subscription-usage.entity';
 
 @Injectable()
 export class FileService {
@@ -22,6 +23,8 @@ export class FileService {
     private configService: ConfigService,
     @InjectRepository(File)
     private fileRepository: Repository<File>,
+    @InjectRepository(SubscriptionUsage)
+    private subscriptionUsageRepository: Repository<SubscriptionUsage>,
     private aiService: AIService, // Assuming you have an AI service for text extraction and summarization
   ) {
     // Ensure upload directory exists
@@ -68,6 +71,16 @@ export class FileService {
     fileData: Express.Multer.File,
     folderId?: string | null,
   ): Promise<File> {
+    const subscriptionUsage = await this.subscriptionUsageRepository.findOne({
+      where: { subscription: { user: { id: userId} } },
+      relations: ['subscription', 'subscription.user'],
+      order: { createdAt: 'DESC' } // Get the most recent subscription
+    });
+
+    if (!subscriptionUsage) {
+      throw new NotFoundException('Subscription usage not found for user');
+    }
+
     if (fileData.size > 100 * 1024 * 1024) {
       throw new BadRequestException('Course size limit of 100MB exceeded');
     }
@@ -126,6 +139,9 @@ export class FileService {
     file.expires = newSig.expires;*/
 
     const savedFile = await this.fileRepository.save(file);
+
+    subscriptionUsage.filesUploaded += 1; // Increment files uploaded count
+    await this.subscriptionUsageRepository.save(subscriptionUsage);
 
     return savedFile;
   }

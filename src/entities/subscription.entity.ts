@@ -2,6 +2,7 @@ import { Column, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColum
 import { Transaction } from "./transaction.entity";
 import { User } from "./user.entity";
 import { SubscriptionUsage } from "./subscription-usage.entity";
+import { SubscriptionPlan } from "./subscription-plan.entity";
 
 @Entity('subscriptions')
 export class Subscription {
@@ -59,6 +60,13 @@ export class Subscription {
 
     @OneToMany(() => SubscriptionUsage, usage => usage.subscription, { nullable: true })
     usages: SubscriptionUsage[];
+
+    @ManyToOne(() => SubscriptionPlan, plan => plan.subscriptions, { nullable: true })
+    @JoinColumn({ name: 'planId' })
+    plan: SubscriptionPlan;
+
+    @Column({ type: 'boolean', default: false })
+    scheduledCancel: boolean;
 
     @Column({ type: 'timestamp' })
     createdAt: Date;

@@ -18,13 +18,13 @@ export class WebhooksService {
                 return await this.paymentService.subscriptionCreated(payload);
             case 'transaction.completed':
                 // Handle transaction completed event
-                return this.paymentService.transactionCompleted(payload);
+                return await this.paymentService.transactionCompleted(payload);
             case 'subscription.updated':
                 // Handle subscription updated event
-                return this.paymentService.subscriptionUpdated(payload);
+                return await this.paymentService.subscriptionUpdated(payload);
             case 'subscription.canceled':
                 // Handle subscription canceled event
-                return this.paymentService.subscriptionCanceled(payload);
+                return await this.paymentService.subscriptionCanceled(payload);
             default:
                 // Handle unknown event type
                 this.logger.warn(`Unhandled event type: ${payload.event_type}`);
