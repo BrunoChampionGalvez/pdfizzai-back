@@ -1,5 +1,5 @@
-import { Controller, Get, NotFoundException, Param, Put } from "@nestjs/common";
-import { Subscription } from "@paddle/paddle-node-sdk";
+import { Controller, Get, NotFoundException, Param, Patch, Put } from "@nestjs/common";
+import { AuthToken, Subscription } from "@paddle/paddle-node-sdk";
 import { PaymentService } from "src/services/payment.service";
 import { SubscriptionUsage } from "src/entities/subscription-usage.entity";
 import { Subscription as dbSubscription } from "src/entities/subscription.entity";
@@ -82,5 +82,53 @@ export class PaymentController {
             throw new NotFoundException(`Subscription plan with ID ${subscriptionId} not found`);
         }
         return subscriptionPlan
+    }
+
+    @Get('auth-token/customer/:customerId')
+    async generateAuthTokenCustomer(
+        @Param('customerId') customerId: string
+    ): Promise<AuthToken> {
+        // Logic to generate auth token for a customer
+        const authToken = await this.paymentService.generateAuthTokenCustomer(customerId);
+        if (!authToken) {
+            throw new NotFoundException(`Auth token for customer with ID ${customerId} not found`);
+        }
+        return authToken;
+    }
+
+    @Patch('upgrade-subscription/:subscriptionId')
+    async upgradeSubscription(
+        @Param('subscriptionId') subscriptionId: string
+    ): Promise<boolean> {
+        // Logic to upgrade a subscription
+        const upgradedSubscription = await this.paymentService.upgradeSubscription(subscriptionId);
+        if (!upgradedSubscription) {
+            throw new NotFoundException(`Subscription with ID ${subscriptionId} not found`);
+        }
+        return upgradedSubscription;
+    }
+
+    @Patch('downgrade-subscription/:subscriptionId')
+    async downgradeSubscription(
+        @Param('subscriptionId') subscriptionId: string
+    ): Promise<boolean> {
+        // Logic to downgrade a subscription
+        const downgradedSubscription = await this.paymentService.downgradeSubscription(subscriptionId);
+        if (!downgradedSubscription) {
+            throw new NotFoundException(`Subscription with ID ${subscriptionId} not found`);
+        }
+        return downgradedSubscription;
+    }
+
+    @Patch('reactivate-subscription/:subscriptionId')
+    async reactivateSubscription(
+        @Param('subscriptionId') subscriptionId: string
+    ): Promise<boolean> {
+        // Logic to reactivate a subscription
+        const reactivatedSubscription = await this.paymentService.reactivateSubscription(subscriptionId);
+        if (!reactivatedSubscription) {
+            throw new NotFoundException(`Subscription with ID ${subscriptionId} not found`);
+        }
+        return reactivatedSubscription;
     }
 }

@@ -20,7 +20,7 @@ export class AuthService {
     // Check if user already exists
     const existingUser = await this.userRepository.findOne({ where: { email } });
     if (existingUser) {
-      throw new UnauthorizedException('User already exists');
+      throw new UnauthorizedException('A user with this email already exists');
     }
 
     // Hash password

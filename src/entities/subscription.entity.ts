@@ -42,6 +42,21 @@ export class Subscription {
     @Column({ nullable: true })
     nextBillingAt: Date;
 
+    @Column({ nullable: true })
+    hasUpgraded: boolean;
+
+    @Column({ nullable: true })
+    hasDowngraded: boolean;
+
+    @Column({ nullable: true })
+    billingBeforeUpgrade: Date;
+
+    @Column({ nullable: true })
+    messagesLeftBeforeUpgrade: number;
+
+    @Column({ nullable: true })
+    filesLeftBeforeUpgrade: number;
+
     @ManyToOne(() => User, user => user.subscriptions, { nullable: true })
     @JoinColumn({ name: 'userId' })
     user: User;

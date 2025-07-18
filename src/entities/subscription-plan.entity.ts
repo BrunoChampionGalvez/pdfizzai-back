@@ -36,6 +36,15 @@ export class SubscriptionPlan {
     @OneToMany(() => Subscription, subscription => subscription.plan, { nullable: true })
     subscriptions: Subscription[];
 
+    @Column({ nullable: true })
+    monthlyPaddlePriceId: string; // Paddle price ID for monthly billing
+
+    @Column({ nullable: true })
+    yearlyPaddlePriceId: string; // Paddle price ID for yearly billing
+
+    @Column({ nullable: true })
+    paddleProductId: string; // Paddle product ID
+
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     createdAt: Date;
 }
