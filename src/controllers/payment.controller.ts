@@ -131,4 +131,16 @@ export class PaymentController {
         }
         return reactivatedSubscription;
     }
+
+    @Patch('cancel-downgrade/:subscriptionId')
+    async cancelDowngrade(
+        @Param('subscriptionId') subscriptionId: string
+    ): Promise<boolean> {
+        // Logic to cancel a downgrade
+        const canceledDowngrade = await this.paymentService.cancelDowngrade(subscriptionId);
+        if (!canceledDowngrade) {
+            throw new NotFoundException(`Subscription with ID ${subscriptionId} not found`);
+        }
+        return canceledDowngrade;
+    }
 }

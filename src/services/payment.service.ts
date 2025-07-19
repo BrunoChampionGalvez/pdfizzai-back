@@ -417,6 +417,7 @@ export class PaymentService {
             prorationBillingMode: 'do_not_bill', // Ensure no proration
         });
 
+        subscription.hasDowngraded = true; // Mark as downgraded
         subscription.paddleProductId = starterPlan?.paddleProductId || 'Error: Starter plan not found';
         subscription.scheduledCancel = false; // Reset scheduled cancel if downgrading
         subscription.hasFullAccess = true; // Assume downgrade still grants full access
@@ -491,5 +492,27 @@ export class PaymentService {
             subscription.plan = starterPlan;
             await this.subscriptionRepository.save(subscription);
         }
+    }
+
+    async cancelDowngrade(subscriptionId: string): Promise<boolean> {
+        if (!subscriptionId) {
+            throw new NotFoundException('Subscription ID is required for canceling downgrade');
+        }
+
+        const subscription = await this.subscriptionRepository.findOne({
+            where: { paddleSubscriptionId: subscriptionId },
+            relations: ['plan']
+        });
+
+        if (!subscription) {
+            throw new NotFoundException('Subscription not found');
+        }
+
+        // Cancel the downgrade
+        subscription.hasDowngraded = false; // Reset downgrade status
+        subscription.scheduledCancel = false; // Reset scheduled cancel if canceling downgrade
+        await this.subscriptionRepository.save(subscription);
+
+        return true;
     }
 }
