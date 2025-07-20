@@ -120,14 +120,14 @@ export class AIService {
       );
 
       const response = await this.gemini.models.generateContentStream({
-        model: this.geminiModels.flash,
+        model: this.geminiModels.pro,
         contents: formattedMessages,
         config: {
           systemInstruction: systemPrompt,
           temperature: 0.2,
           maxOutputTokens: 8192,
           thinkingConfig: {
-            thinkingBudget: 0,
+            thinkingBudget: 128,
           },
         },
       });

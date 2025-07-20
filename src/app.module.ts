@@ -4,6 +4,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard } from '@nestjs/throttler';
 
@@ -83,6 +84,7 @@ import { SubscriptionPlan } from './entities/subscription-plan.entity';
       ttl: 60000,
       limit: 100,
     }]),
+    ScheduleModule.forRoot(),
   ],
   controllers: [
     AuthController,

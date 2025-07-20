@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Subscription as dbSubscription } from "src/entities/subscription.entity";
 import { Transaction, TransactionStatus } from "src/entities/transaction.entity";
-import { Repository } from "typeorm";
+import { LessThan, MoreThan, Repository } from "typeorm";
 import axios from "axios";
 import { User } from "src/entities";
 import { SubscriptionUsage } from "src/entities/subscription-usage.entity";
@@ -476,7 +476,7 @@ export class PaymentService {
     @Cron('0 0 * * *') // Runs daily at midnight
     async updateDowngradeSubscriptions(): Promise<void> {
         const subscriptions = await this.subscriptionRepository.find({
-            where: { hasDowngraded: true, scheduledCancel: false },
+            where: { hasDowngraded: true, scheduledCancel: false, nextBillingAt: LessThan(new Date()) },
             relations: ['plan']
         });
 
@@ -490,6 +490,7 @@ export class PaymentService {
                 throw new NotFoundException('Starter plan not found');
             }
 
+            subscription.hasDowngraded = false; // Reset downgrade status
             subscription.plan = starterPlan;
             await this.subscriptionRepository.save(subscription);
         }
