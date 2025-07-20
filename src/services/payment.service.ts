@@ -265,6 +265,7 @@ export class PaymentService {
 
         if (subscription) {
             subscription.scheduledCancel = true;
+            subscription.hasDowngraded = false; // Reset downgrade status on cancellation
             await this.subscriptionRepository.save(subscription);
         }
 
