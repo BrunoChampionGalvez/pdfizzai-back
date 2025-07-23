@@ -58,13 +58,13 @@ export class ChatService {
     let fileContents: Array<{
       id: string;
       name: string;
-      content: string;
+      summary: string;
       originalName: string;
     }> = [];
     let newFileContents: Array<{
       id: string;
       name: string;
-      content: string;
+      summary: string;
       originalName: string;
     }> = [];
 
@@ -121,20 +121,34 @@ export class ChatService {
       return; // Exit the generator
     }
 
-    if (
-      sessionContext.contextFileIds &&
-      sessionContext.contextFileIds.length > 0
-    ) {
+    // if (
+    //   sessionContext.contextFileIds &&
+    //   sessionContext.contextFileIds.length > 0
+    // ) {
+    //   const files = await Promise.all(
+    //     sessionContext.contextFileIds.map((fileId) =>
+    //       this.fileService.findOneForChat(fileId),
+    //     ),
+    //   );
+
+    //   fileContents = files.map((file) => ({
+    //     id: file.id,
+    //     name: file.filename,
+    //     content: file.textByPages || 'No content available',
+    //     originalName: file.originalName,
+    //   }));
+    // }
+
+    if (fileIds && fileIds.length > 0) {
       const files = await Promise.all(
-        sessionContext.contextFileIds.map((fileId) =>
+        fileIds.map((fileId) =>
           this.fileService.findOneForChat(fileId),
         ),
       );
-
       fileContents = files.map((file) => ({
         id: file.id,
         name: file.filename,
-        content: file.textByPages || 'No content available',
+        summary: file.summary || 'No content available',
         originalName: file.originalName,
       }));
     }
@@ -149,7 +163,7 @@ export class ChatService {
       newFileContents = files.flat().map((file) => ({
         id: file.id,
         name: file.filename,
-        content: file.textByPages || 'No content available',
+        summary: file.summary || 'No content available',
         originalName: file.originalName,
       }));
 
@@ -170,36 +184,42 @@ export class ChatService {
       name: string;
       content: string;
     }> = [];
+    
     const category = await this.aiService.userQueryCategorizer(content);
+    let questions: string[] = [];
     if (content) {
-      if (fileIds.length > 0) {
-        if (category === 'SPECIFIC') {
-          const searchResults = await this.aiService.semanticSearch(
-            content,
-            userId,
-          );
-          extractedContent = [
-            ...extractedContent,
-            ...searchResults.map((result) => ({
-              fileId: (result.fields as { fileId: string }).fileId,
-              name: (result.fields as { name: string; chunk_text: string })
-                .name,
-              content: (result.fields as { name: string; chunk_text: string })
-                .chunk_text,
-              userId: (result.fields as { userId: string }).userId,
-            })).filter((result) => {
-              return result.userId === userId;
-            }),
-          ];
+      if (category === 'SPECIFIC') {
+        const searchResults = await this.aiService.semanticSearch(
+          content,
+          userId,
+        );
+        extractedContent = [
+          ...extractedContent,
+          ...searchResults.map((result) => ({
+            fileId: (result.fields as { fileId: string }).fileId,
+            name: (result.fields as { name: string; chunk_text: string })
+              .name,
+            content: (result.fields as { name: string; chunk_text: string })
+              .chunk_text,
+            userId: (result.fields as { userId: string }).userId,
+          })).filter((result) => {
+            return result.userId === userId;
+          }),
+        ];
 
-          fileContents = [];
-        } else {
-          fileContents = fileContents.slice(0, 4);
-        }
+        fileContents = [];
       } else {
-        if (category === 'SPECIFIC') {
+        const messages = await this.getChatHistory(userId, sessionId);
+        questions = await this.aiService.generateQuestionsFromQuery(
+          content,
+          messages.slice(-6),
+          fileContents
+        );
+
+        for (const question of questions) {
+          console.log(`Generated question: ${question}`);
           const searchResults = await this.aiService.semanticSearch(
-            content,
+            question,
             userId,
           );
           extractedContent = [
@@ -215,9 +235,6 @@ export class ChatService {
               return result.userId === userId;
             }),
           ];
-        } else {
-          fileContents = [];
-          extractedContent = [];
         }
       }
 
@@ -236,26 +253,12 @@ export class ChatService {
               .join('\n')
           : 'No extracted content from files provided for this message';
 
-      // Convert array objects to strings for AI service
-      const fileContentsStr =
-        fileContents.length > 0
-          ? fileContents
-              .map(
-                (file) =>
-                  `File title: ${file.name}\nFile original name: ${file.originalName}\nContent: ${file.content}\nFile Id: ${file.id}`,
-              )
-              .join('\n\n')
-          : 'No files context provided for this message';
-
       this.logger.debug('Converted content arrays to strings');
-      console.log(
-        `📊 Chat Service: fileContentsStr length: ${fileContentsStr.length}`,
-      );
       console.log(
         `📊 Chat Service: extractedFileContentsStr length: ${extractedFileContentsStr.length}`,
       );
 
-      const context = `\nFile Content Context: ${fileContentsStr}\nExtracted File Content Context: ${extractedFileContentsStr}`;
+      const context = `\nFile Content Context: ${extractedFileContentsStr}`;
 
       // Remove messages from session to avoid circular reference issues
       (session as any).messages = undefined;
@@ -264,13 +267,18 @@ export class ChatService {
       userMessage = this.chatMessageRepository.create({
         role: MessageRole.USER,
         content: content,
+        questions: questions,
         session: session,
+        context: context,
         session_id: sessionId, // Explicit assignment
         selectedMaterials: selectedMaterials,
       });
 
       this.logger.debug(`Saving user message for session ${sessionId}`);
       await this.chatMessageRepository.save(userMessage);
+
+      // Send the user message ID to frontend
+      yield `[USER_MESSAGE_ID]${userMessage.id}[/USER_MESSAGE_ID]`;
 
       // Double-check that the message was saved with the correct sessionId
       const savedMessage = await this.chatMessageRepository.findOne({
@@ -440,6 +448,9 @@ export class ChatService {
         `✅ Chat Service: Successfully saved AI message with ID: ${aiMessage.id}`,
       );
 
+      // Send the AI message ID to frontend
+      yield `[AI_MESSAGE_ID]${aiMessage.id}[/AI_MESSAGE_ID]`;
+
       await this.paymentService.increaseMessageUsage(
         subscriptionUsage?.id,
       );
@@ -537,25 +548,17 @@ export class ChatService {
     
     // Use AI service to search for the reference
     try {
-      /*const oldChatMessage = await this.chatMessageRepository.findOne({
+      const oldChatMessage = await this.chatMessageRepository.findOne({
         where: { id: chatMessageId },
-        select: ['context'],
       });
 
       if (!oldChatMessage) {
         throw new NotFoundException(`Chat message with ID ${chatMessageId} not found`);
-      }*/
-
-      // Fetch the file of the reference
-      const file = await this.fileService.findOne(referenceId);
-      if (!file) {
-        throw new NotFoundException(`File with ID ${referenceId} not found`);
       }
 
-      // Convert all new line characters in context to a single space
-      const normalizedContext = file.textByPages.replace(/\r?\n|\r/g, ' ');
+      // Fetch the file of the reference
 
-      const response = await this.aiService.loadReferenceAgain(textToSearch, normalizedContext);
+      const response = await this.aiService.loadReferenceAgain(textToSearch, oldChatMessage.context || '');
       console.log(`AI search response: ${response}`);
       // Escape newlines in textToSearch for literal replacement
       const escapedTextToSearch = textToSearch.replace(/\n/g, '\\n');

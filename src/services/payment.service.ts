@@ -200,7 +200,7 @@ export class PaymentService {
                 startsAt: new Date(payload.data.billing_period.starts_at),
                 endsAt: new Date(payload.data.billing_period.ends_at),
                 messagesUsed: 0, // Initialize messages used to 0
-                filesUploaded: 0, // Initialize files uploaded to 0
+                filePagesUploaded: 0, // Initialize file pages uploaded to 0
             });
 
             await this.subscriptionUsageRepository.save(subscriptionUsage);
@@ -370,9 +370,9 @@ export class PaymentService {
             throw new NotFoundException('Subscription usage or starter plan not found');
         }
         const messagesLeftBeforeUpgrade = subscriptionUsage ? starterPlan?.messagesLimit - subscriptionUsage.messagesUsed : 0;
-        const filesLeftBeforeUpgrade = subscriptionUsage ? starterPlan?.filesLimit - subscriptionUsage.filesUploaded : 0;
+        const filePagesLeftBeforeUpgrade = subscriptionUsage ? starterPlan?.filePagesLimit - subscriptionUsage.filePagesUploaded : 0;
         subscription.messagesLeftBeforeUpgrade = messagesLeftBeforeUpgrade;
-        subscription.filesLeftBeforeUpgrade = filesLeftBeforeUpgrade;
+        subscription.filePagesLeftBeforeUpgrade = filePagesLeftBeforeUpgrade;
         subscription.price = proPlan.price;
         subscription.name = proPlan.name;
         await this.subscriptionRepository.save(subscription);
@@ -467,7 +467,7 @@ export class PaymentService {
                 // If the next billing date is today or in the past, reset the upgrade status
                 subscription.hasUpgraded = false;
                 subscription.messagesLeftBeforeUpgrade = 0; // Reset messages left before upgrade
-                subscription.filesLeftBeforeUpgrade = 0; // Reset files left before upgrade
+                subscription.filePagesLeftBeforeUpgrade = 0; // Reset file pages left before upgrade
                 await this.subscriptionRepository.save(subscription);
             }
         }

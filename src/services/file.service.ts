@@ -71,15 +71,6 @@ export class FileService {
     fileData: Express.Multer.File,
     folderId?: string | null,
   ): Promise<File> {
-    const subscriptionUsage = await this.subscriptionUsageRepository.findOne({
-      where: { subscription: { user: { id: userId} } },
-      relations: ['subscription', 'subscription.user'],
-      order: { createdAt: 'DESC' } // Get the most recent subscription
-    });
-
-    if (!subscriptionUsage) {
-      throw new NotFoundException('Subscription usage not found for user');
-    }
 
     if (fileData.size > 100 * 1024 * 1024) {
       throw new BadRequestException('Course size limit of 100MB exceeded');
@@ -139,9 +130,6 @@ export class FileService {
     file.expires = newSig.expires;*/
 
     const savedFile = await this.fileRepository.save(file);
-
-    subscriptionUsage.filesUploaded += 1; // Increment files uploaded count
-    await this.subscriptionUsageRepository.save(subscriptionUsage);
 
     return savedFile;
   }
@@ -212,7 +200,7 @@ export class FileService {
    * @param textByPages The extracted text organized by page numbers
    * @returns The updated research paper entity
    */
-  async saveExtractedText(id: string, userId: string, textByPages: string): Promise<File> {
+  async saveExtractedText(id: string, userId: string, textByPages: string, totalPages?: number): Promise<File> {
     // Get the research paper and verify ownership
     const paper = await this.findOne(id);
     
@@ -231,6 +219,9 @@ export class FileService {
       textByPages.slice(0, quarterLength),
     );
 
+    // Generate summary
+    const summary = await this.aiService.generateSummary(textByPages);
+
     // Update the paper with extracted text and mark as extracted
     let updatedPaper = await this.fileRepository.save({
       ...paper,
@@ -240,11 +231,21 @@ export class FileService {
       filename: fileName,
       processed: true, // Mark as processed since we've extracted the content
       textExtracted: true,
+      totalPages,
+      summary,
       storage_path: paper.storage_path,
       originalName: paper.originalName,
       mime_type: paper.mime_type,
       size_bytes: paper.size_bytes
     });
+
+    const subscriptionUsage = await this.subscriptionUsageRepository.findOne({
+      where: { subscription: { user: { id: userId } } },
+    });
+    if (!subscriptionUsage) {
+      throw new NotFoundException('Subscription usage not found for user');
+    }
+    subscriptionUsage.filePagesUploaded += totalPages || 1; // Increment file pages uploaded count
 
     // Upsert text
     const namespace = this.pc

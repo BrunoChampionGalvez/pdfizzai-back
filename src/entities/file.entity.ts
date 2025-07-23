@@ -39,6 +39,9 @@ export class File {
   @Column({ type: 'text', array: true, nullable: true })
   chunks: string[];
 
+  @Column({ nullable: true })
+  totalPages: number;
+
   @Column()
   originalName: string;
 

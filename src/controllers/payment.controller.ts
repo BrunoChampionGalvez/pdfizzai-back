@@ -64,7 +64,7 @@ export class PaymentController {
         return subscriptionUsage
     }
 
-    @Get('files-count/user/:userId')
+    @Get('files-pages-count/user/:userId')
     async getUserFilesCount(
         @Param('userId') userId: string
     ): Promise<{ totalFiles: number }> {

@@ -39,6 +39,9 @@ export class ChatMessage {
   @Column('text')
   content: string;
 
+  @Column({ type: 'jsonb', nullable: true })
+  questions: string[]; // Questions generated from the user query
+
   @ManyToOne('File', 'referencedMessages', { nullable: true })
   @JoinColumn({ name: 'referenced_file_id' })
   referencedFiles: File[];

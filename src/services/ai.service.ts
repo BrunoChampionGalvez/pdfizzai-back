@@ -219,13 +219,12 @@ export class AIService {
 
   private buildSystemPrompt(): string {
     const prompt = `
-      You are a helpful assistant called Refy. If the user greets you, greet the user back. Your goal is to respond to user queries based on the files' context that you receive, and provide references extracted from that files' context when responding. You will receive context in the form of complete files or extracted text from files (that can come from different files or the same file in an unorderly way), and you should respond to the user based on this information. Respond with concise but complete answers. Do not include any additional information or explanations from your knowledge base, only use the information provided to you as context by the user. You must use all the information provided to you in the current message and in previous messages as well (provided in the chat history). If the answer to the question asked by the user is not found in the information provided to you (previously or currently), respond with the following message: "The requested information was not found in the file context. Please try again with a different question."
+      You are a helpful assistant. If the user greets you, greet the user back. Your goal is to respond to user queries based on the files context content that you receive, and provide references extracted from that files' context content when responding. You will receive context in the form of extracted sections of text from files (that can come from different files or the same file in an unorderly way), and you should respond to the user based on this information. Respond with concise but complete answers. Do not include any additional information or explanations from your knowledge base, only use the information provided to you as context by the user. You must use all the information provided to you in the current message and in previous messages as well (provided in the chat history). If the answer to the question asked by the user is not found in the information provided to you (previously or currently), respond with the following message: "The requested information was not found in the file context. Please try again with a different question."
       
-      You will receive one or both of the two following information:
-      1. File Content Context: The contents of files that the user has uploaded.
-      2. Extracted File Content Context: Different portions of text that have been extracted from different files, or the same file, and provided in an unorderly way.
+      You will receive the following information:
+      1. File Content Context: Different portions of text that have been extracted from different files, or the same file, and provided in an unorderly way.
       
-      You must reference the pieces of information that you are using to draw your statements with the file id and the information from which you drew your statements. When referencing, you must provide the id of the file and the exact text from the file you are referencing. The reference must follow the statement that it is referencing. To reference each piece of information, you must use the following JSON-like format:
+      You must reference the pieces of information that you are using to draw your statements with the file id and the information from which you drew your statement. When referencing, you must provide the id of the file and the exact text from the file you are referencing. The reference must follow the statement that it is referencing. To reference each piece of information, you must use the following JSON-like format:
       
       Example of a reference from a file or an extracted text from a file:
 
@@ -239,7 +238,7 @@ export class AIService {
 
       It is extremely important that everytime you respond using references, you open and also close the reference tags ([REF] and [/REF]) for each reference.
 
-      If the user talks to you in another language, respond in the same language. But you must always provide the text of the references in the same language as the original source (file, flashcard deck, quiz, etc.)
+      If the user talks to you in another language, respond in the same language as him. But you must always provide the text of the references in the same language as the original source.
 
       IMPORTANT CONSIDERATIONS: 
 
@@ -247,19 +246,23 @@ export class AIService {
       
       2. Sometimes, the text of the files are going to have the text of tables or graphs (from the original pdf from which the information was extracted). This text can be at the start or end of a page, or even in the middle of it. When referencing a text from a file, you must not include the text of tables or graphs in the references. Before including a text in the references, you must verify that it does not contain information from tables or graphs. If it does, and it is at the start or end of the text you want to reference, remove it. But if it is in the middle of the text you want to reference, you must only provide the longest part of the two parts of the text that was split by this table or graph information.
       
-      3. In the text of the references, you must always include all the characters that are part of the text that you are planning on referencing. This includes parenthesis (the '(' and ')' characters), square brackets (the '[' and ']' characters), percentage signs (the '%' character), commas (the ',' character), periods (the '.' character), colons (the ':' character), semicolons (the ';' character), exclamation points (the '!' character), question marks (the '?' character), quotation marks (the '"' character), standard spaces between words, and even letters inside a word, (the ' ' character), and any other characters that are part of the text that you are planning on referencing, even if it doesn't make much sense.
-      
-      4. In the text of the references, don't include the subtitles of the sections of the paper. For example: Introduction, Methods, Results, Discussion, Conclusion, etc. You can distinguish these subtitles by the fact that they are words that are isolated, in the sense that they are not a part of a sentence.
-      
-      5. At the start or end of the pages, you may find text from the headers or footers of the file (metadata of the files). You must not include this text in the references. This text normally can contain DOI numbers, URLs, Scientific Journal names, Author names, page numbers, and other metadata from the original file. When referencing text, always verify that the text you are referencing does not contain any of this information. If it does, and the text you want to reference is split by this, you must only provide the longest part of the two parts of the text that was split by this metadata, similar to point 2. If the text you want to reference is split by this metadata information, it may also contain the [START_PAGE] and [END_PAGE] markers, in that sense, you must not include these markers in the text of the reference.
-      
-      6. When referencing a text from a file, you must always provide the text of the reference as it is in the context provided to you. If it has a mispelling, you must provide it like that. If it has a missing space, you must provide it like that. If it has a random number (that could be a numerical reference, for example) or a random character, you must provide it like that. If it has extra spaces between words or letters inside words, you must provide it like that. When extracting the text from the context to use it in the references, you must not modify it in any way. You must provide the text exactly as it is in the file context provided to you.
+      3. In the text of the references, you must always include all the characters that are part of the text that you are planning on referencing. This includes parenthesis (the '(' and ')' characters), square brackets (the '[' and ']' characters), percentage signs (the '%' character), commas (the ',' character), periods (the '.' character), colons (the ':' character), semicolons (the ';' character), exclamation points (the '!' character), question marks (the '?' character), quotation marks (the '"' character), hyphens (the '-' character), standard spaces between words, and even letters inside a word, (the ' ' character), and any other characters that are part of the text that you are planning on referencing, even if it doesn't make much sense.
 
-      7. When referencing a text from a file, you must never include the title of the file, the authors, the departments, the university, the date of publication, or any metadata that is not part of the main content of the file.
+      4. In the text of the references, you must never add any characters that are not part of the text that you are planning on referencing. This includes the characters mentioned in point 3, but also any other characters that are not part of the text that you are planning on referencing.
+      
+      5. When referencing, if the text you are planning on referencing has an additional word or character next to it (either at the beginning or at the end), with no spaces between the text and the additional word or character, you must never split the two. Provide the text and the additional word or character together, as it appears in the context provided to you. For example, if the text is "There were no significant differences between the two groups.", and the context has "methodsThis was a randomized controlled trial in which 137 participants were enrolled.", you must provide the text of the reference as: "methodsThis was a randomized controlled trial in which 137 participants were enrolled.". Never provide the specific text without the additional word or character, if it corresponds, even if the two don't make much sense together.
+      
+      6. At the start or end of the pages, you may find text from the headers or footers of the file (metadata of the files). You must not include this text in the references. This text normally can contain DOI numbers, URLs, Scientific Journal names, Author names, page numbers, and other metadata from the original file. When referencing text, always verify that the text you are referencing does not contain any of this information. If it does, and the text you want to reference is split by this, you must only provide the longest part of the two parts of the text that was split by this metadata, similar to point 2. If the text you want to reference is split by this metadata information, it may also contain the [START_PAGE] and [END_PAGE] markers, in that sense, you must not include these markers in the text of the reference.
+      
+      7. When referencing, you must always provide the text of the reference as it is in the context provided to you. If it has a mispelling, you must provide it like that. If it has a missing space, you must provide it like that. If it has a random number (that could be a numerical reference, for example) or a random character, you must provide it like that. If it has extra spaces between words or letters inside words, you must provide it like that. When extracting the text from the context to use it in the references, you must not modify it in any way. You must provide the text exactly as it is in the file context provided to you.
 
-      8. The text of each reference that you provide must be coherent and concise, but also complete. It must not correspond to multiple sections of the file, it should be self-contained. Meaning it contains enough information to be understood on it's own. The text of each reference must never be too long, that is, it must not exceed around 150 words. If you need to provide more information, you must split it into multiple references, each with a coherent text that is self-contained.
+      8. When referencing a text from a file, you must never include the title of the file, the authors, the departments, the university, the date of publication, or any metadata that is not part of the main content of the file.
 
-      9. The text that you want to reference can be split by numerical references, that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc. You must always check if there is a numerical reference in the text that you want to reference, and if there is, you must only provide the longest part of the two parts of the text that was split by this numerical reference. If the numerical reference is at the start or end of the text you want to reference, you must remove it.
+      9. The text of each reference that you provide must be coherent and concise, but also complete. It must not correspond to multiple sections of the file, it should be self-contained. Meaning it contains enough information to be understood on it's own. The text of each reference must never be too long, that is, it must not exceed around 150 words. If you need to provide more information, you must split it into multiple references, each with a coherent text that is self-contained.
+
+      10. The text that you want to reference can be split by numerical references, that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc. You must always check if there is a numerical reference in the text that you want to reference, and if there is, you must only provide the longest part of the two parts of the text that was split by this numerical reference. If the numerical reference is at the start or end of the text you want to reference, you must remove it.
+
+      11. In the statements that you provide that are outside of the references, you must never provide the ids of the files of the text provided in the context. You can provide the titles of the files, but never the ids. The ids are only for the references that you provide.
 
       NOTE: You can provide multiple references in a single response, but you must always open and close the reference tags ([REF] and [/REF]) for each reference. Each statement that you make, should be followed by the reference that you used to draw that statement.
     `;
@@ -342,10 +345,10 @@ export class AIService {
     const recordCountNumber = Number(recordCount);
     const isRecordCountNumber = !isNaN(recordCountNumber);
     const topK = isRecordCountNumber
-      ? recordCountNumber < 10
+      ? recordCountNumber < 3
         ? recordCountNumber
-        : 10
-      : 10;
+        : 3
+      : 3;
     const topN = isRecordCountNumber
       ? topK < 5
         ? Math.floor(topK - topK * 0.2)
@@ -414,17 +417,16 @@ export class AIService {
   async generateSummary(fileContent: string | null): Promise<string> {
     try {
       // Prepare the prompt for generating a summary
-      const prompt = `
-        Generate a summary of the following text:
-        "${fileContent}"
-      `;
+      const prompt = `${fileContent}`;
 
       const result = await this.gemini.models.generateContent({
-        model: this.geminiModels.flashLite,
+        model: this.geminiModels.flash,
         contents: prompt,
         config: {
           systemInstruction:
-            'You are a summary generator. You will receive the extracted text from a file.Generate a concise summary of that text. Return ONLY the summary text, nothing else. The summary should be between around 3 and 4 sentences long.',
+            `You are a summary generator. You will receive the extracted text from a file.Generate a concise summary of that text. Return ONLY the summary text, nothing else. The summary should be around 10% to 25% long of the original text, but if the original text is too short, don't make the summary shorter than 1000 words. The percentage should be a reasonable percentage, so that the summary conveys the main points effectively. The summary will then be passed to another AI model, alongside with a general user query, to generate specific questions based on it, that will then be used to make requests to a vector store. So if you can tailor the summary for that purpose, it would be great.
+            
+            Note: Ignore the [START_PAGE] and [END_PAGE] markers, they are not part of the text that you should summarize. They are just used to indicate the start and end of a page in the original file.`,
           temperature: 0.2,
         },
       });
@@ -477,19 +479,23 @@ export class AIService {
         config: {
           systemInstruction: `You have to do the following tasks in this exact order: 
 
-1. Search for a specific text inside the Files context. The text you are searching for might not be an exact match to what is in the Files context. It could have minor variations in wording, characters, punctuation, or spacing.
+1. Search for a specific text inside the Files context, that is a set of text snippets from one or more files that are distributed in an unorderly way. The text you are searching for might not be an exact match to what is in the Files context. It could have minor variations in wording, characters, punctuation, or spacing.
 
 2. If you find the specific text, but it is split into two parts by other content (such as information that could have been extracted from a table, graph, or other unrelated text, or the [START_PAGE] and [END_PAGE] markers), you must identify both parts. After identifying both parts, you must return ONLY the longer of the two parts. Do not include the content that was in the middle.
 
-3. If you find the specific text and it is not split, but contains minor variations (e.g., different punctuation, a few different words or characters), return it exactly as it appears in the Files context.
+3. If you find the specific text and it is not split, but contains minor variations (e.g., different punctuation, a few different words or characters), return it exactly as it appears in the Files context. 
 
-4. If you do not find the specific text in the Files context (neither whole, with minor variations, nor split), then you must return the specific text exactly as you received it.
+4. If you find the specific text and it has an additional word or character next to it (either at the beginning or at the end), with no spaces between the specific text and the additional word or character, you must never split the two. Return the specific text and the additional word or character together, as it appears in the Files context. For example, if the specific text is "There were no significant differences between the two groups.", and the Files context has "methodsThis was a randomized controlled trial in which 137 participants were enrolled.", you must return "methodsThis was a randomized controlled trial in which 137 participants were enrolled.". Never return the specific text without the additional word or character, if it corresponds, even if the two don't make much sense together. If the additional word or character is part of a larger text or phrase, you must only return the specific text next to the additional word or character, and ignore the other part, even if it doesn't make sense. For example, if the specific text is "We conducted a randomized controlled trial in which 137 participants were enrolled.", and the Files context has "Materials and methodsThis was a randomized controlled trial in which 137 participants were enrolled.", you must return "methodsThis was a randomized controlled trial in which 137 participants were enrolled.". You must always return the specific text and the additional word or character together, when it corresponds, and nothing more.
 
-5. If you find the specific text, but it is split by numerical references (that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc), you must identify both parts. After identifying both parts, you must return ONLY the longer of the two parts. Do not include both parts, nor the numerical reference that was in the middle.`,
-          temperature: 0.2,
+IMPORTANT: The previous point 4 doesn't apply if the specific text is split by numerical references (that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc). In that case, you must identify both parts and return ONLY the longer of the two parts. Do not include both parts, nor the numerical reference that was in the middle.
+
+5. If you do not find the specific text in the Files context (neither whole, with minor variations, nor split), then you must return the specific text exactly as you received it.
+
+6. If you find the specific text, but it is split by numerical references (that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc), you must identify both parts. After identifying both parts, you must return ONLY the longer of the two parts. Do not include both parts, nor the numerical reference that was in the middle.`,
+          temperature: 0.1,
           maxOutputTokens: 8000,
           thinkingConfig: {
-            thinkingBudget: 15000,
+            thinkingBudget: 128,
           },
         },
       });
@@ -506,5 +512,83 @@ export class AIService {
         `Error searching reference again: ${error instanceof Error ? error.message : 'Unknown error'}`,
       )
     }
+  }
+
+  async generateQuestionsFromQuery(userQuery: string, lastSixMessages: ChatMessage[], fileContents: Array<{ id: string; name: string; summary: string }>): Promise<string[]> {
+    try {
+      const response = await this.gemini.models.generateContent({
+        model: this.geminiModels.flash,
+        contents: `<user_query>${userQuery}</user_query><last_six_messages>${lastSixMessages.map(message => `<message><role>${message.role}</role><content>${message.content}</content></message>`).join('')}</last_six_messages><files_summaries>${fileContents.map(file => `<file_summary><name>${file.name}</name><summary>${file.summary}</summary></file_summary>`).join('')}</files_summaries>`,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'array',
+            items: {
+              type: 'string',
+            }
+          },
+          systemInstruction: `Your task is to generate specific questions based on the provided user query, files summaries and the six last messages from a chat. You will receive a user query, the summaries from one or more files, and the last six messages from a chat. Your goal is to generate between 2 and 6 specific questions, depending on what the user query demands, that can be used to search for information in a vector store that contains the whole text of the files and that will be later used to answer to the user query. The questions should be specific and related to the content of the files. Use the last six messages from the chat to understand the context of the user query so that you can generate relevant questions. If the user query is generic, and the aswer has already been provided in the chat, you should generate questions that can be used to search for information in the vector store that can respond to the user query in a more specific or different way, or that can provide more details about the topic. You must provide the questions in a JSON array format, with each question as a string. Do not include any additional text or explanations, just the JSON array with the questions.
+
+          Examples of specific questions:
+          1. "What are the effects of miocin on bacterial growth?"
+          2. "How does the theory of relativity explain the curvature of spacetime?"
+          3. "What are the mechanisms of photosynthesis in plants?"
+          4. "What are the main differences between Freud's and Jung's theories of psychoanalysis?"
+          5. "What is the role of mitochondria in ATP production?"
+          6. "How does insulin regulate blood sugar levels in the human body?"
+          
+          Examples of generic questions (that you should not generate):
+          1. "What are the main points treated in this file?"
+          2. "What is the hypothesis of this paper?"
+          3. "What is the main idea of this file?"
+          4. "What are the methods that were used in this article?"
+          5. "What are the results of this paper?"
+          6. "What are the conclusions of this research paper?"
+          7. "Write a summary of this file."
+          8. "Write a summary of the file named [NAME_OF_FILE]"
+          
+          Example of flow:
+          [EXAMPLE]
+          User query provided: "What are the key points treated in the file?"
+          Files summaries provided: 
+          "File 1: Cancer Incidence and Sleep Disorders in U.S. Veterans.
+          File summary: The study discusses the effects of sleep disorders on cancer incidence, examining the duration and severity of diagnosis among veterans. It highlights the importance of understanding the relationship between sleep disorders and cancer risk, and suggests that further research is needed to explore this connection...This study was based on a U.S. Department of Veterans Affairs database, which provided a large sample size of veterans with sleep disorders and cancer diagnoses... The study found that veterans with sleep disorders had a higher risk of developing cancer, particularly those with more severe sleep disorders..."
+          File 2: [NAME_OF_FILE]
+          File summary: [FILE_SUMMARY]
+          ...
+          File N: [NAME_OF_FILE]
+          File summary: [FILE_SUMMARY]
+
+          Specific questions generated:
+          1. "What is the relationship between sleep disorders and cancer risk in veterans?"
+          2. "What was the population studied in the research on sleep disorders and cancer?"
+          3. "What were the key findings of the study on sleep disorders and cancer in veterans?"
+          4. "What are the implications of the study's findings for veterans with sleep disorders?"
+          5. "What further research is needed to understand the relationship between sleep disorders and cancer in veterans?"
+          [/EXAMPLE]
+
+          As you can notice, the specific questions generated are focused on extracting detailed information from the file summaries, rather than asking generic questions about the files themselves. This approach helps to ensure that the questions are relevant and can lead to more precise answers when searching the vector store.
+          
+          Note: You will receive the information in the following format:
+          <user_query>...</user_query><files_summaries>...</files_summaries>
+          `,
+          temperature: 0.2,
+          maxOutputTokens: 8000,
+        },
+      });
+
+      let result = response.text;
+      return result ? JSON.parse(result) : []; // Return an empty array if no result found
+    } catch (error) {
+      console.error(
+        `Error generating questions from query: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      );
+      throw new InternalServerErrorException(
+        `Error generating questions from query: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
+    }
+    return [];
   }
 }

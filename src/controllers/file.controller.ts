@@ -47,13 +47,14 @@ export class FileController {
   async saveExtractedText(
     @Req() req: Request & { user: any },
     @Param('id') id: string,
-    @Body () textData: { textByPages: string }
+    @Body () textData: { textByPages: string, totalPages?: number }
   ) {
     try {
       const result = await this.fileService.saveExtractedText(
         id,
         req.user.userId, // Fixed: using req.user.userId instead of req.user.id
-        textData.textByPages
+        textData.textByPages,
+        textData.totalPages
       );
       
       console.log('Backend: Text extraction saved successfully for file:', result.id);

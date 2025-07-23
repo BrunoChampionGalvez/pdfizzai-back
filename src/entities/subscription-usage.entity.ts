@@ -19,7 +19,7 @@ export class SubscriptionUsage {
     messagesUsed: number;
 
     @Column({ type: 'int', default: 0 })
-    filesUploaded: number;
+    filePagesUploaded: number;
 
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     createdAt: Date;

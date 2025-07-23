@@ -55,7 +55,7 @@ export class Subscription {
     messagesLeftBeforeUpgrade: number;
 
     @Column({ nullable: true })
-    filesLeftBeforeUpgrade: number;
+    filePagesLeftBeforeUpgrade: number;
 
     @ManyToOne(() => User, user => user.subscriptions, { nullable: true })
     @JoinColumn({ name: 'userId' })

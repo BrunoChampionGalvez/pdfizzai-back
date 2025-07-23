@@ -27,11 +27,11 @@ export class SubscriptionPlan {
     @Column()
     trialMessagesLimit: number; // Limit on the number of trial messages
 
-    @Column()
-    filesLimit: number; // Limit on the number of files allowed
+    @Column({ type: 'int', nullable: true })
+    filePagesLimit: number; // Limit on the number of file pages allowed
 
-    @Column()
-    trialFilesLimit: number; // Limit on the number of trial files
+    @Column({ type: 'int', nullable: true })
+    trialFilePagesLimit: number; // Limit on the number of trial file pages
 
     @OneToMany(() => Subscription, subscription => subscription.plan, { nullable: true })
     subscriptions: Subscription[];
