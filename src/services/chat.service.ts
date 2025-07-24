@@ -212,7 +212,7 @@ export class ChatService {
         const messages = await this.getChatHistory(userId, sessionId);
         questions = await this.aiService.generateQuestionsFromQuery(
           content,
-          messages.slice(-6),
+          messages.slice(-4), // Use last 3 messages for context
           fileContents
         );
 
@@ -273,6 +273,15 @@ export class ChatService {
         session_id: sessionId, // Explicit assignment
         selectedMaterials: selectedMaterials,
       });
+
+      for (const fileContent of fileContents) {
+        const file = await this.fileService.findOneForChat(
+          fileContent.id,
+        );
+
+        file.referencedMessages.push(userMessage);
+        await this.fileService.save(file);
+      }
 
       this.logger.debug(`Saving user message for session ${sessionId}`);
       await this.chatMessageRepository.save(userMessage);

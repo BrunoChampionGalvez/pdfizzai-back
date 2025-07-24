@@ -184,6 +184,7 @@ export class FileService {
   async findOneForChat(id: string): Promise<File> {
     const file = await this.fileRepository.findOne({
       where: { id },
+      relations: ['referencedMessages']
     });
 
     if (!file) {
@@ -438,5 +439,9 @@ export class FileService {
     // Keep first part (for context) and truncate the middle if needed
     const truncated = str.substring(0, maxLength - 3) + '...';
     return truncated;
+  }
+
+  async save(file: File): Promise<void> {
+    await this.fileRepository.save(file);
   }
 }

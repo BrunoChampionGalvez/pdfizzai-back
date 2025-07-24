@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn, ManyToMany } from 'typeorm';
 import { File } from './file.entity';
 
 export enum MessageRole {
@@ -42,8 +42,7 @@ export class ChatMessage {
   @Column({ type: 'jsonb', nullable: true })
   questions: string[]; // Questions generated from the user query
 
-  @ManyToOne('File', 'referencedMessages', { nullable: true })
-  @JoinColumn({ name: 'referenced_file_id' })
+  @ManyToMany(() => File, (file) => file.referencedMessages, { nullable: true })
   referencedFiles: File[];
 
   @Column({ type: 'text', nullable: true })

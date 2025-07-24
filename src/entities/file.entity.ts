@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, OneToMany, JoinColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, OneToMany, JoinColumn, UpdateDateColumn, ManyToMany, JoinTable } from 'typeorm';
 import { User } from './user.entity';
 import { Folder } from './folder.entity';
 import { ChatMessage } from './chat-message.entity';
@@ -64,7 +64,18 @@ export class File {
   @Column({ nullable: true })
   expires: number;
 
-  @OneToMany('ChatMessage', 'referencedFile')
+  @ManyToMany(() => ChatMessage, (chatMessage) => chatMessage.referencedFiles)
+  @JoinTable({
+    name: 'file_referenced_messages',
+    joinColumn: {
+      name: 'file_id',
+      referencedColumnName: 'id'
+    },
+    inverseJoinColumn: {
+      name: 'message_id',
+      referencedColumnName: 'id'
+    }
+  })
   referencedMessages: ChatMessage[];
 
   @CreateDateColumn({ name: 'created_at' })

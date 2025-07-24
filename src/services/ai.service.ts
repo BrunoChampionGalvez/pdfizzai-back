@@ -120,14 +120,14 @@ export class AIService {
       );
 
       const response = await this.gemini.models.generateContentStream({
-        model: this.geminiModels.pro,
+        model: this.geminiModels.flash,
         contents: formattedMessages,
         config: {
           systemInstruction: systemPrompt,
           temperature: 0.2,
           maxOutputTokens: 8192,
           thinkingConfig: {
-            thinkingBudget: 128,
+            thinkingBudget: 0,
           },
         },
       });
@@ -219,7 +219,7 @@ export class AIService {
 
   private buildSystemPrompt(): string {
     const prompt = `
-      You are a helpful assistant. If the user greets you, greet the user back. Your goal is to respond to user queries based on the files context content that you receive, and provide references extracted from that files' context content when responding. You will receive context in the form of extracted sections of text from files (that can come from different files or the same file in an unorderly way), and you should respond to the user based on this information. Respond with concise but complete answers. Do not include any additional information or explanations from your knowledge base, only use the information provided to you as context by the user. You must use all the information provided to you in the current message and in previous messages as well (provided in the chat history). If the answer to the question asked by the user is not found in the information provided to you (previously or currently), respond with the following message: "The requested information was not found in the file context. Please try again with a different question."
+      You are a helpful assistant. If the user greets you, greet the user back. Your goal is to respond to user queries based on the files context content that you receive, and provide references extracted from that files' context content when responding. You will receive context in the form of extracted sections of text from files (that can come from different files or the same file in an unorderly way), and you should respond to the user based on this information. Respond with concise but complete answers. Do not include any additional information or explanations from your knowledge base, only use the information provided to you as context by the user. You must use all the information provided to you in the current message and in previous messages as well (provided in the chat history). If the answer to the question asked by the user is not found in the information provided to you (previously or currently), respond with the following message: "The requested information was not found in the file context. Please try again providing more context."
       
       You will receive the following information:
       1. File Content Context: Different portions of text that have been extracted from different files, or the same file, and provided in an unorderly way.
@@ -420,7 +420,7 @@ export class AIService {
       const prompt = `${fileContent}`;
 
       const result = await this.gemini.models.generateContent({
-        model: this.geminiModels.flash,
+        model: this.geminiModels.flashLite,
         contents: prompt,
         config: {
           systemInstruction:
@@ -491,11 +491,11 @@ IMPORTANT: The previous point 4 doesn't apply if the specific text is split by n
 
 5. If you do not find the specific text in the Files context (neither whole, with minor variations, nor split), then you must return the specific text exactly as you received it.
 
-6. If you find the specific text, but it is split by numerical references (that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc), you must identify both parts. After identifying both parts, you must return ONLY the longer of the two parts. Do not include both parts, nor the numerical reference that was in the middle.`,
-          temperature: 0.1,
+6. If you find the specific text, but it is split by numerical references (that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc), you must identify both parts. After identifying both parts, you must return ONLY the longer of the two parts. Do not include both parts, nor the numerical reference that was in the middle. Take into account that the numerical references could be separated by a comma, a space, or enclosed in square brackets, so you must be careful to identify them correctly.`,
+          temperature: 0.2,
           maxOutputTokens: 8000,
           thinkingConfig: {
-            thinkingBudget: 128,
+            thinkingBudget: 15000,
           },
         },
       });
@@ -518,7 +518,7 @@ IMPORTANT: The previous point 4 doesn't apply if the specific text is split by n
     try {
       const response = await this.gemini.models.generateContent({
         model: this.geminiModels.flash,
-        contents: `<user_query>${userQuery}</user_query><last_six_messages>${lastSixMessages.map(message => `<message><role>${message.role}</role><content>${message.content}</content></message>`).join('')}</last_six_messages><files_summaries>${fileContents.map(file => `<file_summary><name>${file.name}</name><summary>${file.summary}</summary></file_summary>`).join('')}</files_summaries>`,
+        contents: `<user_query>${userQuery}</user_query><last_six_messages>${lastSixMessages.map(message => `<message><role>${message.role}</role><content>${message.content}</content><files_summaries>${message.referencedFiles && message.referencedFiles.length > 0 ? message.referencedFiles.map(file => `<file_summary><name>${file.filename}</name><summary>${file.summary}</summary></file_summary>`).join('') : ''}</files_summaries></message>`).join('')}</last_six_messages><files_summaries>${fileContents && fileContents.length > 0 ? fileContents.map(file => `<file_summary><name>${file.name}</name><summary>${file.summary}</summary></file_summary>`).join('') : ''}</files_summaries>`,
         config: {
           responseMimeType: 'application/json',
           responseSchema: {
@@ -527,7 +527,7 @@ IMPORTANT: The previous point 4 doesn't apply if the specific text is split by n
               type: 'string',
             }
           },
-          systemInstruction: `Your task is to generate specific questions based on the provided user query, files summaries and the six last messages from a chat. You will receive a user query, the summaries from one or more files, and the last six messages from a chat. Your goal is to generate between 2 and 6 specific questions, depending on what the user query demands, that can be used to search for information in a vector store that contains the whole text of the files and that will be later used to answer to the user query. The questions should be specific and related to the content of the files. Use the last six messages from the chat to understand the context of the user query so that you can generate relevant questions. If the user query is generic, and the aswer has already been provided in the chat, you should generate questions that can be used to search for information in the vector store that can respond to the user query in a more specific or different way, or that can provide more details about the topic. You must provide the questions in a JSON array format, with each question as a string. Do not include any additional text or explanations, just the JSON array with the questions.
+          systemInstruction: `Your task is to generate specific questions based on the provided user query, files summaries and the four last messages from a chat (that could each probably contain the summaries sent with them). You will receive a user query, the summaries from one or more files, and the last six messages from a chat. Your goal is to generate between 2 and 6 specific questions, depending on what the user query demands, that can be used to search for information in a vector store that contains the whole text of the files and that will be later used to answer to the user query. The questions should be specific and related to the content of the files. Use the last six messages from the chat to understand the context of the user query so that you can generate relevant questions. If the user query is generic, and the aswer has already been provided in the chat, you should generate questions that can be used to search for information in the vector store that can respond to the user query in a more specific or different way, or that can provide more details about the topic. You must provide the questions in a JSON array format, with each question as a string. Do not include any additional text or explanations, just the JSON array with the questions.
 
           Examples of specific questions:
           1. "What are the effects of miocin on bacterial growth?"
