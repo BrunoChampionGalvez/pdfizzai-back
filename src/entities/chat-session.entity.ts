@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
 import { User } from './user.entity';
+import { ExtractedContent } from './extracted-content.entity';
 
 @Entity('chat_sessions')
 export class ChatSession {
@@ -24,6 +25,9 @@ export class ChatSession {
 
   @OneToMany('ChatMessage', 'session')
   messages: any[];
+
+  @OneToMany(() => ExtractedContent, (extractedContent) => extractedContent.chatSession)
+  extractedContents: ExtractedContent[];
 
   @Column('text', { array: true, default: () => 'ARRAY[]::text[]' })
   contextFileIds: string[]; // IDs of files used for context in this session

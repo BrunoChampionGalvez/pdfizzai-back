@@ -24,14 +24,66 @@ export class ChatService {
     private readonly paymentService: PaymentService, // Assuming you have a PaymentService to handle subscription logic
   ) {}
 
+  /**
+   * Called on application startup to check for and recover orphaned conversations
+   * This helps maintain conversation integrity across system restarts
+   */
+  async onApplicationStartup(): Promise<void> {
+    try {
+      this.logger.log('Checking for orphaned conversations on startup...');
+      
+      // Find all sessions that might have orphaned user messages
+      // Look for sessions where the last message is a user message created more than 5 minutes ago
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+      
+      const suspiciousSessions = await this.chatSessionRepository
+        .createQueryBuilder('session')
+        .leftJoin('session.messages', 'message')
+        .where('message.created_at < :fiveMinutesAgo', { fiveMinutesAgo })
+        .andWhere('message.role = :userRole', { userRole: MessageRole.USER })
+        .groupBy('session.id')
+        .having('MAX(message.created_at) = message.created_at') // Last message in session
+        .andHaving('message.role = :userRole', { userRole: MessageRole.USER })
+        .getMany();
+
+      if (suspiciousSessions.length > 0) {
+        this.logger.warn('Found ' + suspiciousSessions.length + ' sessions that may have orphaned messages');
+        
+        for (const session of suspiciousSessions) {
+          try {
+            const integrityCheck = await this.checkConversationIntegrity(session.id, session.user_id);
+            
+            if (!integrityCheck.isHealthy && integrityCheck.orphanedMessages.length > 0) {
+              this.logger.warn('Attempting to recover orphaned messages in session ' + session.id);
+              const recovery = await this.recoverConversationIntegrity(session.id, session.user_id);
+              
+              if (recovery.success) {
+                this.logger.log('Successfully recovered session ' + session.id);
+              } else {
+                this.logger.error('Failed to fully recover session ' + session.id + '. Remaining issues: ' + recovery.remainingIssues.join(', '));
+              }
+            }
+          } catch (error) {
+            this.logger.error('Error checking/recovering session ' + session.id + ':', error);
+          }
+        }
+      } else {
+        this.logger.log('No orphaned conversations detected');
+      }
+    } catch (error) {
+      this.logger.error('Error during startup conversation integrity check:', error);
+      // Don't throw - this shouldn't prevent the application from starting
+    }
+  }
+
   async findSessionById(id: string, userId: string): Promise<ChatSession> {
     const session = await this.chatSessionRepository.findOne({
       where: { id, user_id: userId },
-      relations: ['messages']
+      relations: ['messages', 'messages.extractedContents']
     });
 
     if (!session) {
-      throw new NotFoundException(`Chat session with ID ${id} not found`);
+      throw new NotFoundException('Chat session with ID ' + id + ' not found');
     }
 
     return session;
@@ -86,7 +138,7 @@ export class ChatService {
 
       if (!session) {
         throw new Error(
-          `Session with ID ${sessionId} not found or does not belong to user ${userId}`,
+          'Session with ID ' + sessionId + ' not found or does not belong to user ' + userId,
         );
       }
 
@@ -97,7 +149,7 @@ export class ChatService {
       }*/
 
       console.log(
-        `Processing message for session ${sessionId}, user ${userId}`,
+        'Processing message for session ' + sessionId + ', user ' + userId,
       );
 
       // Setup session context
@@ -183,96 +235,140 @@ export class ChatService {
       fileId: string;
       name: string;
       content: string;
+      userId: string;
     }> = [];
     
+    // Optimization 1: Parallel processing and batching
     const category = await this.aiService.userQueryCategorizer(content);
     let questions: string[] = [];
+    
     if (content) {
       if (category === 'SPECIFIC') {
-        const searchResults = await this.aiService.semanticSearch(
-          content,
-          userId,
-        );
-        extractedContent = [
-          ...extractedContent,
-          ...searchResults.map((result) => ({
-            fileId: (result.fields as { fileId: string }).fileId,
-            name: (result.fields as { name: string; chunk_text: string })
-              .name,
-            content: (result.fields as { name: string; chunk_text: string })
-              .chunk_text,
-            userId: (result.fields as { userId: string }).userId,
-          })).filter((result) => {
-            return result.userId === userId;
-          }),
-        ];
-
-        fileContents = [];
-      } else {
-        const messages = await this.getChatHistory(userId, sessionId);
-        questions = await this.aiService.generateQuestionsFromQuery(
-          content,
-          messages.slice(-4), // Use last 3 messages for context
-          fileContents
-        );
-
-        for (const question of questions) {
-          console.log(`Generated question: ${question}`);
-          const searchResults = await this.aiService.semanticSearch(
-            question,
-            userId,
+        // Parallel processing for SPECIFIC queries
+        if (fileContents && fileContents.length > 0) {
+          // Batch semantic searches in parallel
+          const searchPromises = fileContents.map(fileContent => 
+            this.aiService.semanticSearch(content, userId, fileContent.id)
+          );
+          const allSearchResults = await Promise.all(searchPromises);
+          
+          // Check if any search returned empty results
+          if (allSearchResults.some(results => !results || results.hits.length === 0)) {
+            throw new BadRequestException(
+              'No relevant content found for the provided query',
+            );
+          }
+          
+          // Batch filter operations in parallel
+          const filterPromises = allSearchResults.map((searchResults, index) => 
+            this.aiService.filterSearchResults(searchResults.hits, searchResults.question, content)
+              .then(({ fileId, name, text }) => ({
+                fileId: fileContents[index].id,
+                name: fileContents[index].name,
+                content: text,
+                userId: userId,
+              }))
+          );
+          
+          const filteredResults = await Promise.all(filterPromises);
+          extractedContent = [...extractedContent, ...filteredResults];
+        } else {
+          const searchResults = await this.aiService.semanticSearch(content, userId);
+          if (!searchResults || searchResults.hits.length === 0) {
+            throw new BadRequestException(
+              'No relevant content found for the provided query',
+            );
+          }
+          const { fileId, name, text } = await this.aiService.filterSearchResults(
+            searchResults.hits,
+            searchResults.question,
+            content,
           );
           extractedContent = [
             ...extractedContent,
-            ...searchResults.map((result) => ({
-              fileId: (result.fields as { fileId: string }).fileId,
-              name: (result.fields as { name: string; chunk_text: string })
-                .name,
-              content: (result.fields as { name: string; chunk_text: string })
-                .chunk_text,
-              userId: (result.fields as { userId: string }).userId,
-            })).filter((result) => {
-              return result.userId === userId;
-            }),
+            {
+              fileId: fileId,
+              name: name,
+              content: text,
+              userId: userId,
+            },
           ];
         }
+      } else {
+        // Optimization 2: Parallel processing for GENERIC queries using batch processing
+        // First, get all files in parallel
+        const filePromises = fileContents.map(fileContent => 
+          this.fileService.findOneForChat(fileContent.id)
+        );
+        const files = await Promise.all(filePromises);
+        
+        // Prepare file data for batch processing with cost optimization
+        const fileData = await Promise.all(
+          files.map(async (file) => {
+            if (file.questions && file.questions.length > 0) {
+              return {
+                fileId: file.id,
+                name: file.filename,
+                questions: file.questions,
+                description: file.description || '',
+                // COST OPTIMIZATION: Only pass file text for small files or when questions are insufficient
+                // This reduces API costs significantly for large files
+                fileTextByPages: file.textByPages
+              };
+            }
+            return null;
+          })
+        );
+        
+        // Filter out null values and process with batch method
+        const validFileData = fileData.filter(data => data !== null);
+        
+        if (validFileData.length > 0) {
+           // Optimization: Use smart processing strategy for optimal performance
+           const allFileResults = await this.aiService.smartProcessingStrategy(
+             validFileData,
+             content,
+             userId
+           );
+           
+           // Add to extracted content
+           extractedContent = [...extractedContent, ...allFileResults];
+         }
       }
+    }
 
       console.log(
         '🎯 Chat Service: Starting sendMessage for session',
         sessionId,
       );
 
-      const extractedFileContentsStr =
-        extractedContent.length > 0
-          ? extractedContent
-              .map(
-                (file) =>
-                  `File name: ${file.name} Content: ${file.content} File Id: ${file.fileId}`,
-              )
-              .join('\n')
-          : 'No extracted content from files provided for this message';
-
-      this.logger.debug('Converted content arrays to strings');
-      console.log(
-        `📊 Chat Service: extractedFileContentsStr length: ${extractedFileContentsStr.length}`,
+      const savedExtractedContent = await this.fileService.saveExtractedContent(
+        session,
+        sessionId,
+        userId,
+        extractedContent
       );
-
-      const context = `\nFile Content Context: ${extractedFileContentsStr}`;
 
       // Remove messages from session to avoid circular reference issues
       (session as any).messages = undefined;
 
       // Create user message - ensure chatSessionId is set
-      userMessage = this.chatMessageRepository.create({
-        role: MessageRole.USER,
-        content: content,
-        questions: questions,
-        session: session,
-        context: context,
-        session_id: sessionId, // Explicit assignment
-        selectedMaterials: selectedMaterials,
-      });
+      userMessage = new ChatMessage();
+      userMessage.role = MessageRole.USER;
+      userMessage.content = content;
+      userMessage.questions = questions;
+      userMessage.session = session;
+      userMessage.session_id = sessionId;
+      userMessage.selectedMaterials = selectedMaterials;
+      
+      // Properly set up the relationship with extractedContents
+      if (savedExtractedContent && savedExtractedContent.length > 0) {
+        // Set the chatMessage reference on each ExtractedContent
+        savedExtractedContent.forEach(content => {
+          content.chatMessage = userMessage;
+        });
+        userMessage.extractedContents = savedExtractedContent;
+      }
 
       for (const fileContent of fileContents) {
         const file = await this.fileService.findOneForChat(
@@ -283,11 +379,44 @@ export class ChatService {
         await this.fileService.save(file);
       }
 
-      this.logger.debug(`Saving user message for session ${sessionId}`);
-      await this.chatMessageRepository.save(userMessage);
+      this.logger.debug('Saving user message for session ' + sessionId);
+      
+      // Debug: Log user message details before saving
+      console.log('🔍 Chat Service: About to save user message with details:', {
+        id: userMessage.id,
+        session_id: userMessage.session_id,
+        role: userMessage.role,
+        content: userMessage.content?.substring(0, 100) + '...',
+        hasSession: !!userMessage.session,
+        sessionId: userMessage.session?.id,
+        hasExtractedContents: !!userMessage.extractedContents,
+        extractedContentsLength: userMessage.extractedContents?.length || 0,
+        hasQuestions: !!userMessage.questions,
+        questionsLength: userMessage.questions?.length || 0,
+        hasSelectedMaterials: !!userMessage.selectedMaterials,
+        selectedMaterialsLength: userMessage.selectedMaterials?.length || 0
+      });
+      
+      try {
+        await this.chatMessageRepository.save(userMessage);
+        console.log('✅ Chat Service: User message saved successfully with ID:', userMessage.id);
+      } catch (saveError) {
+        console.error('❌ Chat Service: Failed to save user message:', {
+          error: saveError,
+          errorName: saveError instanceof Error ? saveError.name : 'Unknown',
+          errorMessage: saveError instanceof Error ? saveError.message : 'Unknown error',
+          userMessageData: {
+            id: userMessage.id,
+            session_id: userMessage.session_id,
+            role: userMessage.role,
+            hasContent: !!userMessage.content
+          }
+        });
+        throw saveError;
+      }
 
       // Send the user message ID to frontend
-      yield `[USER_MESSAGE_ID]${userMessage.id}[/USER_MESSAGE_ID]`;
+      yield '[USER_MESSAGE_ID]' + userMessage.id + '[/USER_MESSAGE_ID]';
 
       // Double-check that the message was saved with the correct sessionId
       const savedMessage = await this.chatMessageRepository.findOne({
@@ -306,70 +435,59 @@ export class ChatService {
       updatedSession = await this.findSessionById(sessionId, userId);
       messages = updatedSession.messages || [];
 
-      const responseGenerator = this.aiService.generateChatResponse(
-        messages,
-        context,
-      );
+      // Check for orphaned user messages (user messages without corresponding assistant responses)
+      // This can happen if the system failed after saving the user message but before saving the AI response
+      const lastMessage = messages[messages.length - 1];
+      const hasOrphanedUserMessage = lastMessage && 
+        lastMessage.role === MessageRole.USER && 
+        lastMessage.id !== userMessage.id; // Not the message we just created
 
-      console.log('🔄 Chat Service: Got response generator from AI service');
-
-      // Collect all yielded content
-      let streamedContent = '';
-      let chunkIndex = 0;
-
-      console.log('📡 Chat Service: Starting to process streaming chunks');
-
-      // Process the generator to yield chunks and collect complete content
-      for await (const chunk of responseGenerator) {
-        chunkIndex++;
-
-        if (chunk) {
-          console.log(
-            `📥 Chat Service: Received chunk ${chunkIndex}, length: ${chunk.length}`,
-          );
-          console.log(
-            `📥 Chat Service: Chunk ${chunkIndex} content: "${chunk}"`,
-          );
-
-          const beforeLength = streamedContent.length;
-          streamedContent += chunk;
-          const afterLength = streamedContent.length;
-
-          console.log(
-            `📊 Chat Service: Added chunk ${chunkIndex}. Before: ${beforeLength}, After: ${afterLength}, Expected: ${beforeLength + chunk.length}`,
-          );
-
-          if (afterLength !== beforeLength + chunk.length) {
-            console.error(
-              `❌ Chat Service: CHARACTER LOSS DETECTED! Expected ${beforeLength + chunk.length}, got ${afterLength}`,
-            );
-          }
-
-          yield chunk;
-          console.log(
-            `✅ Chat Service: Yielded chunk ${chunkIndex} to frontend`,
-          );
-        } else {
-          console.log(`⚠️ Chat Service: Received empty chunk ${chunkIndex}`);
-        }
+      if (hasOrphanedUserMessage) {
+        console.warn('⚠️ Chat Service: Detected orphaned user message (ID: ' + lastMessage.id + '). This may indicate a previous system failure.');
+        // You could implement recovery logic here, such as:
+        // 1. Generate a response to the orphaned message
+        // 2. Log the incident for monitoring
+        // 3. Notify the user about the recovered conversation
       }
 
-      console.log(`🏁 Chat Service: Finished processing ${chunkIndex} chunks`);
-      console.log(
-        `📊 Chat Service: Final streamedContent length: ${streamedContent.length}`,
-      );
-      console.log(
-        `📄 Chat Service: Final streamedContent preview: "${streamedContent.substring(0, 200)}..."`,
-      );
+      // Calculate how many messages to include based on 5-message chunks
+      const messageCount = messages.length;
+      const messageChunkSize = 5;
+      const numChunks = Math.floor(messageCount / messageChunkSize);
+      const remainingMessages = messageCount % messageChunkSize;
+      
+      // If we have less than 5 messages, send all of them
+      // Otherwise, send only the remainder after the last complete chunk
+      const messagesToSend = messageCount <= messageChunkSize 
+        ? messages
+        : messages.slice(-(remainingMessages || messageChunkSize));
 
-      // Extract citations from the complete streamed content
-      console.log('🔍 Chat Service: Starting citation extraction');
+      console.log('📡 Chat Service: Starting to stream response from AI service');
+
+      let streamedContent: string = ''
+      let chunkIndex = 0;
+
+      // Stream the response from AI service and apply reference replacements progressively
+      for await (const chunk of this.aiService.generateChatResponseStream(messagesToSend)) {
+        chunkIndex++;
+        streamedContent += chunk;
+        
+        console.log(
+           '📥 Chat Service: Chunk ' + chunkIndex + ' content: "' + streamedContent + '"',
+         );
+         
+         yield chunk;
+         console.log(
+           '✅ Chat Service: Yielded chunk ' + chunkIndex + ' to frontend',
+         );
+       }
+
       const citations: { id: string }[] = [];
       const citationRegex = /\[REF\]([\s\S]*?)\[\/REF\]/gs;
       const citationMatches = streamedContent.match(citationRegex) || [];
 
       console.log(
-        `🔗 Chat Service: Found ${citationMatches.length} citation matches`,
+        '🔗 Chat Service: Found ' + citationMatches.length + ' citation matches',
       );
 
       for (const match of citationMatches) {
@@ -379,12 +497,12 @@ export class ChatService {
           if (contentMatch && contentMatch[1]) {
             const jsonContent = contentMatch[1].trim();
             console.log(
-              `🔗 Chat Service: Parsing citation JSON: "${jsonContent}"`,
+              '🔗 Chat Service: Parsing citation JSON: "' + jsonContent + '"',
             );
             const citation = JSON.parse(jsonContent) as { id: string };
             citations.push(citation);
             console.log(
-              `✅ Chat Service: Successfully parsed citation:`,
+              '✅ Chat Service: Successfully parsed citation:',
               citation,
             );
           }
@@ -394,14 +512,21 @@ export class ChatService {
         }
       }
 
-      // Ensure we have valid content
-      const finalContent =
-        streamedContent ||
-        'Sorry, I encountered an error while processing your request.';
+      // Apply final reference replacements to the complete streamed content
+      let finalContent = streamedContent;
 
       console.log(
-        `💾 Chat Service: About to save message with content length: ${finalContent.length}`,
+        '💾 Chat Service: About to save message with content length: ' + finalContent.length,
       );
+      
+      // Validate that we have the required data for saving
+      if (!sessionId || !userId) {
+        throw new Error('Missing required session ID or user ID for saving message');
+      }
+      
+      if (!session || !session.id) {
+        throw new Error('Invalid session object for saving message');
+      }
 
       // Transform AICitation objects to entity citation types
       const transformedEntityCitations = await Promise.all(
@@ -426,7 +551,7 @@ export class ChatService {
               message = e.message;
             }
             console.error(
-              `Error transforming citation (id: ${citation.id}): ${message}`,
+              'Error transforming citation (id: ' + citation.id + '): ' + message,
               e, // Log the original error object for more details
             );
             return null;
@@ -437,46 +562,148 @@ export class ChatService {
       const finalCitations = transformedEntityCitations.filter(
         (c) => c !== null,
       );
+      
+      // Validate citations data
+      for (const citation of finalCitations) {
+        if (!citation.id || typeof citation.id !== 'string') {
+          console.warn('⚠️ Chat Service: Invalid citation ID found:', citation);
+        }
+        if (!citation.text || typeof citation.text !== 'string') {
+          console.warn('⚠️ Chat Service: Invalid citation text found:', citation);
+        }
+      }
+      
+      // Validate extracted contents
+      if (savedExtractedContent && Array.isArray(savedExtractedContent)) {
+        for (const content of savedExtractedContent) {
+          if (!content.id || (typeof content.id !== 'string' && typeof content.id !== 'number')) {
+            console.warn('⚠️ Chat Service: Invalid extracted content ID found:', content);
+          }
+        }
+      }
 
+      console.log('🔧 Chat Service: Getting subscription usage for user:', userId);
       const subscriptionUsage = await this.paymentService.getSubscriptionUsageByUser(
         userId,
       );
-
-      // Create AI message with the final content and citations
-      const aiMessage = this.chatMessageRepository.create({
-        role: MessageRole.MODEL,
-        content: finalContent,
-        context: context,
-        citations: finalCitations,
-        session_id: sessionId,
-        session: session,
+      console.log('🔧 Chat Service: Retrieved subscription usage:', {
+        found: !!subscriptionUsage,
+        id: subscriptionUsage?.id,
+        messagesUsed: subscriptionUsage?.messagesUsed,
+        userId: userId
       });
 
-      await this.chatMessageRepository.save(aiMessage);
-      console.log(
-        `✅ Chat Service: Successfully saved AI message with ID: ${aiMessage.id}`,
-      );
+      let conversationSummary: string | null = null;
+      
+      // Check if we need to generate a conversation summary
+      // We generate summaries every 5 messages, but we need to be smart about when
+      const totalMessagesAfterThisResponse = messages.length - 1
+      const shouldGenerateSummary = totalMessagesAfterThisResponse >= 5 && totalMessagesAfterThisResponse % 5 === 0;
+      
+      if (shouldGenerateSummary) {
+        // Get the last 5 messages for summary
+        const messagesForSummary = messages.slice(-6, -1);
+        conversationSummary = await this.aiService.generateConversationSummary(
+          messagesForSummary
+        );
+      }
+
+      // Create AI message with the final content and citations
+      let aiMessage: ChatMessage;
+      try {
+        aiMessage = this.chatMessageRepository.create({
+          role: MessageRole.MODEL,
+          content: finalContent,
+          conversationSummary: conversationSummary || '',
+          citations: finalCitations || [],
+          session_id: sessionId,
+          session: session,
+        });
+        // Note: extractedContents are already linked to the user message, not the AI response
+
+        console.log('💾 Chat Service: Created AI message entity:', {
+           role: aiMessage.role,
+           contentLength: aiMessage.content?.length || 0,
+           citationsCount: aiMessage.citations?.length || 0,
+           sessionId: aiMessage.session_id,
+           hasSession: !!aiMessage.session
+         });
+         // Note: extractedContents are linked to user message, not AI message
+      } catch (entityCreationError) {
+        console.error('❌ Chat Service: Failed to create AI message entity:', entityCreationError);
+        throw new Error('Failed to create AI message entity: ' + (entityCreationError instanceof Error ? entityCreationError.message : 'Unknown error'));
+      }
+
+      // Use a transaction to ensure both the AI message is saved and usage is updated atomically
+      let savedAiMessage: ChatMessage;
+      try {
+        console.log('🔧 Chat Service: Starting transaction with:', {
+          hasSubscriptionUsage: !!subscriptionUsage,
+          subscriptionUsageId: subscriptionUsage?.id,
+          aiMessageContent: aiMessage.content?.substring(0, 100) + '...'
+        });
+        
+        savedAiMessage = await this.chatMessageRepository.manager.transaction(async transactionalEntityManager => {
+          console.log('🔧 Chat Service: Inside transaction, saving AI message');
+          
+          // Save the AI message within the transaction and get the saved entity
+          const savedMessage = await transactionalEntityManager.save(ChatMessage, aiMessage);
+          console.log('✅ Chat Service: AI message saved successfully with ID:', savedMessage.id);
+          
+          // Update subscription usage within the same transaction
+          if (subscriptionUsage?.id) {
+            console.log('🔧 Chat Service: About to call increaseMessageUsage with transactional entity manager');
+            await this.paymentService.increaseMessageUsage(subscriptionUsage.id, transactionalEntityManager);
+            console.log('✅ Chat Service: increaseMessageUsage completed successfully');
+          } else {
+            console.log('🔧 Chat Service: No subscription usage to update');
+          }
+          
+          console.log('🔧 Chat Service: Transaction operations completed, returning saved message');
+          return savedMessage;
+        });
+        
+        console.log('✅ Chat Service: Transaction completed successfully');
+        
+        console.log(
+          '✅ Chat Service: Successfully saved AI message with ID: ' + savedAiMessage.id,
+        );
+      } catch (error) {
+        console.error('❌ Chat Service: Failed to save AI message in transaction:', error);
+        
+        // Log more details about the error
+        if (error instanceof Error) {
+          console.error('❌ Chat Service: Error details:', {
+            name: error.name,
+            message: error.message,
+            stack: error.stack
+          });
+        }
+        
+        // If transaction fails, we still have the user message saved
+        // Mark this as an orphaned user message scenario
+        console.error('⚠️ Chat Serrvice: User message ' + userMessage.id + ' may be orphaned due to AI message save failure');
+        
+        // You could implement retry logic here or queue for later processing
+        throw error;
+      }
 
       // Send the AI message ID to frontend
-      yield `[AI_MESSAGE_ID]${aiMessage.id}[/AI_MESSAGE_ID]`;
-
-      await this.paymentService.increaseMessageUsage(
-        subscriptionUsage?.id,
-      );
+      yield '[AI_MESSAGE_ID]' + savedAiMessage.id + '[/AI_MESSAGE_ID]';
+      
+      // Update the aiMessage reference for the return statement
+      aiMessage = savedAiMessage;
 
 
       // Update session with new context file IDs
       if (sessionContext.contextFileIds.length > 0) {
         session.contextFileIds = sessionContext.contextFileIds;
         await this.chatSessionRepository.save(session);
-        console.log(`✅ Chat Service: Updated session with context file IDs: ${sessionContext.contextFileIds.join(', ')}`);
+        console.log('✅ Chat Service: Updated session with context file IDs: ' + sessionContext.contextFileIds.join(', '));
       }
 
       return { message: userMessage, aiResponse: aiMessage };
-    } else {
-      throw new BadRequestException('Empty user message');
     }
-  }
 
   async getChatHistory(userId: string, sessionId: string): Promise<ChatMessage[]> {
     // Verify session belongs to user
@@ -506,17 +733,17 @@ export class ChatService {
     const { id: referenceId } = reference;
     try {
       console.log(
-        `Getting file using enhanced lookup for ID: ${referenceId}`,
+        'Getting file using enhanced lookup for ID: ' + referenceId,
       );
       const file = await this.fileService.findOne(
         referenceId,
       );
       // If we found the file, now get its path
-      console.log(`File found, getting path for file ID: ${file.id}`);
+      console.log('File found, getting path for file ID: ' + file.id);
       return await this.fileService.getFilePath(file.id, userId);
     } catch (error) {
       console.error(
-        `Enhanced file lookup failed for ${referenceId}, falling back to direct path lookup:`,
+        'Enhanced file lookup failed for ' + referenceId + ', falling back to direct path lookup:',
         error,
       );
       // Fall back to direct path lookup
@@ -540,7 +767,7 @@ export class ChatService {
             fileId,
           );
           // If we found the file, now get its path
-          console.log(`File found, getting path for file ID: ${file.id}`);
+          console.log('File found, getting path for file ID: ' + file.id);
           return this.fileService.getFilePath(file.id, userId);
         } catch (error) {
           return this.fileService.getFilePath(fileId, userId);
@@ -553,7 +780,7 @@ export class ChatService {
     chatMessage: string,
     textToSearch: string,
   ): Promise<string> {
-    console.log(`Searching for reference in chat message: ${chatMessage}`);
+    console.log('Searching for reference in chat message: ' + chatMessage);
     
     // Use AI service to search for the reference
     try {
@@ -562,13 +789,13 @@ export class ChatService {
       });
 
       if (!oldChatMessage) {
-        throw new NotFoundException(`Chat message with ID ${chatMessageId} not found`);
+        throw new NotFoundException('Chat message with ID ' + chatMessageId + ' not found');
       }
 
       // Fetch the file of the reference
 
-      const response = await this.aiService.loadReferenceAgain(textToSearch, oldChatMessage.context || '');
-      console.log(`AI search response: ${response}`);
+      const response = await this.aiService.loadReferenceAgain(textToSearch, oldChatMessage.extractedContents || []);
+      console.log('AI search response: ' + response);
       // Escape newlines in textToSearch for literal replacement
       const escapedTextToSearch = textToSearch.replace(/\n/g, '\\n');
       const escapedResponse = response.replace(/\n/g, '\\n');
@@ -594,7 +821,139 @@ export class ChatService {
       ) {
         errorMessage = (error as { message: string }).message;
       }
-      throw new BadRequestException(`Failed to search reference: ${errorMessage}`);
+      throw new BadRequestException('Failed to search reference: ' + errorMessage);
     }
+  }
+  
+
+  /**
+   * Checks conversation integrity and identifies potential issues
+   * Returns information about orphaned messages, missing responses, etc.
+   */
+  async checkConversationIntegrity(sessionId: string, userId: string): Promise<{
+    isHealthy: boolean;
+    issues: string[];
+    orphanedMessages: ChatMessage[];
+    totalMessages: number;
+    lastMessageRole: string;
+  }> {
+    const messages = await this.getChatHistory(userId, sessionId);
+    const issues: string[] = [];
+    const orphanedMessages: ChatMessage[] = [];
+    
+    // Check for alternating pattern violations
+    for (let i = 0; i < messages.length - 1; i++) {
+      const currentMessage = messages[i];
+      const nextMessage = messages[i + 1];
+      
+      // Check if we have two consecutive messages of the same role
+      if (currentMessage.role === nextMessage.role) {
+        if (currentMessage.role === MessageRole.USER) {
+          orphanedMessages.push(currentMessage);
+          issues.push('Orphaned user message found at position ' + (i + 1) + ' (ID: ' + currentMessage.id + ')');
+        } else {
+          issues.push('Consecutive assistant messages found at positions ' + (i + 1) + ' and ' + (i + 2));
+        }
+      }
+    }
+    
+    // Check if the last message is a user message without response
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage && lastMessage.role === MessageRole.USER) {
+      orphanedMessages.push(lastMessage);
+      issues.push('Conversation ends with unresponded user message (ID: ' + lastMessage.id + ')');
+    }
+    
+    // Check conversation summary consistency
+    const messagesWithSummaries = messages.filter(msg => 
+      msg.conversationSummary && 
+      msg.conversationSummary !== 'No summary available'
+    );
+    
+    const expectedSummaries = Math.floor(messages.length / 5);
+    if (messagesWithSummaries.length !== expectedSummaries) {
+      issues.push('Summary count mismatch: expected ' + expectedSummaries + ', found ' + messagesWithSummaries.length);
+    }
+    
+    return {
+      isHealthy: issues.length === 0,
+      issues,
+      orphanedMessages,
+      totalMessages: messages.length,
+      lastMessageRole: lastMessage?.role || 'none'
+    };
+  }
+
+  /**
+   * Attempts to recover from conversation integrity issues
+   * This can be called manually or automatically when issues are detected
+   */
+  async recoverConversationIntegrity(sessionId: string, userId: string): Promise<{
+    success: boolean;
+    actionsPerformed: string[];
+    remainingIssues: string[];
+  }> {
+    const integrityCheck = await this.checkConversationIntegrity(sessionId, userId);
+    const actionsPerformed: string[] = [];
+    
+    if (integrityCheck.isHealthy) {
+      return {
+        success: true,
+        actionsPerformed: ['No recovery needed - conversation is healthy'],
+        remainingIssues: []
+      };
+    }
+    
+    // Handle orphaned user messages by generating responses
+    for (const orphanedMessage of integrityCheck.orphanedMessages) {
+      try {
+        console.log('Attempting to recover orphaned message: ' + orphanedMessage.id);
+        
+        // Get context at the time of the orphaned message
+        const messagesUpToOrphan = await this.chatMessageRepository.find({
+          where: { 
+            session_id: sessionId,
+            created_at: { $lte: orphanedMessage.created_at } as any
+          },
+          order: { created_at: 'ASC' }
+        });
+        
+        // Generate a recovery response
+        const recoveryContext = orphanedMessage.extractedContents?.map(ctx => 
+          'File name: ' + ctx.fileName + ' Content: ' + ctx.text + ' File Id: ' + ctx.fileId
+        ).join('\n') || 'No context available';
+        
+        const response = await this.aiService.generateChatResponse(
+          messagesUpToOrphan.slice(-5), // Last 5 messages for context
+        );
+        
+        // Create the recovery AI message
+        const recoveryMessage = this.chatMessageRepository.create({
+          role: MessageRole.MODEL,
+          content: response + '\n\n*[This response was automatically generated during conversation recovery.]*',
+          extractedContents: orphanedMessage.extractedContents || [],
+          conversationSummary: 'Recovery response',
+          session_id: sessionId,
+          session: orphanedMessage.session,
+          created_at: new Date(orphanedMessage.created_at.getTime() + 1000) // 1 second after orphaned message
+        });
+        
+        await this.chatMessageRepository.save(recoveryMessage);
+        actionsPerformed.push('Generated recovery response for orphaned message ' + orphanedMessage.id);
+        
+      } catch (error) {
+        console.error('Failed to recover orphaned message ' + orphanedMessage.id + ':', error);
+        actionsPerformed.push('Failed to recover orphaned message ' + orphanedMessage.id + ': ' + (error instanceof Error ? error.message : 'Unknown error'));
+      }
+    }
+    
+    // Re-check integrity after recovery attempts
+    const finalCheck = await this.checkConversationIntegrity(sessionId, userId);
+    
+    return {
+      success: finalCheck.isHealthy,
+      actionsPerformed,
+      remainingIssues: finalCheck.issues
+    };
   }
 }

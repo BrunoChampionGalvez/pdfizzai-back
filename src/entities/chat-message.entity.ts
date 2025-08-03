@@ -1,9 +1,13 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn, ManyToMany } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn, ManyToMany, OneToMany } from 'typeorm';
 import { File } from './file.entity';
+import { interval } from 'rxjs';
+import { ExtractedContent } from './extracted-content.entity';
 
 export enum MessageRole {
   USER = 'user',
-  MODEL = 'model'
+  MODEL = 'model',
+  DEVELOPER = 'developer',
+  ASSISTANT = 'assistant',
 }
 
 export interface FileCitation {
@@ -45,8 +49,11 @@ export class ChatMessage {
   @ManyToMany(() => File, (file) => file.referencedMessages, { nullable: true })
   referencedFiles: File[];
 
-  @Column({ type: 'text', nullable: true })
-  context: string; // Optional context for the message, e.g. search query or reference
+  @Column({ type: 'jsonb', nullable: true })
+  conversationSummary: string; // Summary of the conversation if applicable
+
+  @OneToMany(() => ExtractedContent, (extractedContent) => extractedContent.chatMessage, { nullable: true, cascade: true })
+  extractedContents: ExtractedContent[];
 
   @Column({ type: 'jsonb', nullable: true })
   citations: FileCitation[];

@@ -3,6 +3,18 @@ import { ConfigService } from "@nestjs/config";
 import { Pinecone, SearchRecordsResponseResult } from "@pinecone-database/pinecone";
 import { join } from 'path';
 import { ChatMessage, MessageRole } from "src/entities";
+import OpenAI from "openai";
+import { ResponseInput } from "openai/resources/responses/responses";
+import { ExtractedContent } from "src/entities/extracted-content.entity";
+import { zodTextFormat } from 'openai/helpers/zod';
+import { z } from 'zod'
+import { Type } from "@google/genai";
+import { response } from "express";
+
+interface OpenAIMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
 
 @Injectable()
 export class AIService {
@@ -13,6 +25,7 @@ export class AIService {
     flash: string;
     flashLite: string;
   };
+  private openaiClient: OpenAI;
   private wrapperPath: string;
   private _Type: any;
   private pc: Pinecone;
@@ -35,6 +48,17 @@ export class AIService {
     );
     this.pc = new Pinecone({
       apiKey: this.configService.get('PINECONE_API_KEY') as string,
+    });
+    
+    // Validate OpenAI API key
+    const openaiApiKey = this.configService.get('OPENAI_API_KEY');
+    if (!openaiApiKey) {
+      this.logger.error('OPENAI_API_KEY not found in environment variables');
+      throw new Error('OPENAI_API_KEY not found in environment variables');
+    }
+    
+    this.openaiClient = new OpenAI({
+      apiKey: openaiApiKey,
     });
   }
 
@@ -91,180 +115,224 @@ export class AIService {
     }
   }
 
-  async *generateChatResponse(
+  async generateChatResponse(
     messages: ChatMessage[],
-    context: string,
-  ): AsyncGenerator<string, void, unknown> {
+  ): Promise<string> {
     try {
-      this.logger.debug('Starting generateChatResponse');
-
       const systemPrompt = this.buildSystemPrompt();
 
-      const formattedMessages = [
-        ...messages.map((msg) => ({
-          role:
-            msg.role === MessageRole.USER
-              ? ('user' as const)
-              : ('model' as const),
-          parts: [
-            {
-              text:
-                'Context: ' + context + '\n\n' + 'User query: ' + msg.content,
-            },
-          ],
-        })),
-      ];
+      // Format conversation summaries if available
+      let conversationSummaryText = '';
+      
+      // Find all messages that have conversation summaries (regardless of position)
+      const messagesWithSummaries = messages.filter(msg => 
+        msg.conversationSummary && 
+        msg.conversationSummary !== 'No summary available' &&
+        msg.conversationSummary.trim() !== ''
+      );
+      
+      if (messagesWithSummaries.length > 0) {
+        const conversationSummaries: string[] = [];
+        
+        // Sort by creation date to maintain chronological order
+        const sortedSummaryMessages = messagesWithSummaries.sort((a, b) => 
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+        
+        sortedSummaryMessages.forEach((msg, index) => {
+          // Calculate the approximate message range this summary covers
+          // Each summary covers roughly 5 messages, but we don't assume exact positions
+          const summaryNumber = index + 1;
+          const estimatedStart = summaryNumber * 5 - 4;
+          const estimatedEnd = summaryNumber * 5;
+          
+          conversationSummaries.push(
+            `Summary ${summaryNumber} (approximately messages ${estimatedStart}-${estimatedEnd}): ${msg.conversationSummary}`
+          );
+        });
+
+        // Add conversation summaries to system prompt if we have any
+        conversationSummaryText = `\n\nConversation History Summaries:\n\n${conversationSummaries.join('\n\n')}`;
+      }
+
+      // Format input for Responses API - can be a simple string or array of message objects
+      const inputContent: ResponseInput = messages.map((msg) => {
+        const messageExtractedContentStr = `Files:\n${msg.extractedContents.map(e => `File Id: ${e.fileId}\nFile Name: ${e.fileName}\nText: ${e.text}`)}`
+        return {
+          role: msg.role === MessageRole.USER ? MessageRole.USER : MessageRole.ASSISTANT,
+          content: `Context: ${messageExtractedContentStr}\n\nUser query: ${msg.content}`,
+        };
+      });
+
+      inputContent.unshift({
+        role: MessageRole.DEVELOPER,
+        content: conversationSummaryText,
+      });
 
       this.logger.debug(
-        `Calling Gemini API with ${formattedMessages.length} messages`,
+        `Calling OpenAI Responses API with ${messages.length} messages`,
+      );
+
+      const response = await this.openaiClient.responses.create({
+        model: "gpt-4.1-mini",
+        instructions: systemPrompt,
+        input: inputContent,
+        stream: false,
+        temperature: 0.2,
+      });
+
+      return response.output_text;
+    } catch (error: unknown) {
+      this.logger.error('Error in generateChatResponse:', error);
+      
+      // Provide more specific error messages for common issues
+      if (error instanceof Error) {
+        if (error.message.includes('401') || error.message.includes('Unauthorized')) {
+          this.logger.error('OpenAI API authentication failed - check your OPENAI_API_KEY');
+          return 'Authentication failed with OpenAI API. Please check your API key configuration.';
+        }
+        if (error.message.includes('quota') || error.message.includes('billing')) {
+          this.logger.error('OpenAI API quota or billing issue');
+          return 'OpenAI API quota exceeded or billing issue. Please check your OpenAI account.';
+        }
+      }
+      
+      return 'Sorry, I encountered an error while processing your request.';
+    }
+  }
+
+  async* generateChatResponseStream(
+    messages: ChatMessage[],
+  ): AsyncGenerator<string, void, unknown> {
+    try {
+      const systemPrompt = this.buildSystemPrompt();
+
+      // Format conversation summaries if available
+      let conversationSummaryText = '';
+      
+      // Find all messages that have conversation summaries (regardless of position)
+      const messagesWithSummaries = messages.filter(msg => 
+        msg.conversationSummary && 
+        msg.conversationSummary !== 'No summary available' &&
+        msg.conversationSummary.trim() !== ''
+      );
+      
+      if (messagesWithSummaries.length > 0) {
+        const conversationSummaries: string[] = [];
+        
+        // Sort by creation date to maintain chronological order
+        const sortedSummaryMessages = messagesWithSummaries.sort((a, b) => 
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+        
+        sortedSummaryMessages.forEach((msg, index) => {
+          // Calculate the approximate message range this summary covers
+          // Each summary covers roughly 5 messages, but we don't assume exact positions
+          const summaryNumber = index + 1;
+          const estimatedStart = summaryNumber * 5 - 4;
+          const estimatedEnd = summaryNumber * 5;
+          
+          conversationSummaries.push(
+            `Summary ${summaryNumber} (approximately messages ${estimatedStart}-${estimatedEnd}): ${msg.conversationSummary || 'No summary available'}`
+          );
+        });
+
+        // Add conversation summaries to system prompt if we have any
+        conversationSummaryText = `\n\nConversation History Summaries:\n\n${conversationSummaries.join('\n\n')}`;
+      }
+
+      // Format input for Responses API - can be a simple string or array of message objects
+      const inputContent = messages.map((msg) => {
+        const messageExtractedContentStr = `\n\n${msg.extractedContents.map(e => `File Id: ${e.fileId}\nFile Name: ${e.fileName}\nText: ${e.text}\n\n`).join('')}`
+        return {
+          role: msg.role === MessageRole.USER ? MessageRole.USER : MessageRole.MODEL,
+          parts: [{
+            text: `Context: ${messageExtractedContentStr}\n\nUser query: ${msg.content}`,
+          }],
+        };
+      });
+
+      if (messagesWithSummaries.length > 0) {
+        inputContent.unshift({
+          role: MessageRole.USER,
+          parts: [{
+            text: conversationSummaryText,
+          }],
+        });
+      }
+
+      this.logger.debug(
+        `Calling OpenAI Responses API with ${messages.length} messages (streaming)`,
       );
 
       const response = await this.gemini.models.generateContentStream({
         model: this.geminiModels.flash,
-        contents: formattedMessages,
         config: {
           systemInstruction: systemPrompt,
-          temperature: 0.2,
-          maxOutputTokens: 8192,
-          thinkingConfig: {
-            thinkingBudget: 0,
-          },
         },
+        contents: inputContent,
+        temperature: 0.2,
       });
 
-      console.log('📥 AI Service: Started receiving response stream');
-      let totalYielded = '';
-      let chunkCount = 0;
-
       for await (const chunk of response) {
-        chunkCount++;
-        this.logger.verbose(`Processing chunk ${chunkCount}`);
-
-        if (chunk.candidates && chunk.candidates[0]) {
-          const candidate = chunk.candidates[0];
-          this.logger.verbose('Chunk has candidates');
-
-          if (candidate.content && candidate.content.parts) {
-            this.logger.verbose(
-              `Chunk has ${candidate.content.parts.length} parts`,
-            );
-
-            for (let i = 0; i < candidate.content.parts.length; i++) {
-              const part = candidate.content.parts[i];
-
-              if (part.text) {
-                const chunkText = part.text;
-                this.logger.verbose(
-                  `Part ${i} text length: ${chunkText.length}`,
-                );
-                this.logger.verbose(`Part ${i} text: "${chunkText.substring(0, 100)}..."`);
-
-                totalYielded += chunkText;
-                this.logger.verbose(
-                  `Total yielded so far: ${totalYielded.length} chars`,
-                );
-
-                yield chunkText;
-                this.logger.verbose(
-                  `Yielded chunk part ${i} of chunk ${chunkCount}`,
-                );
-              } else {
-                this.logger.warn(`Part ${i} has no text`);
-              }
-            }
-          } else {
-            this.logger.warn(
-              'Chunk candidate has no content or parts',
-            );
-          }
-        } else {
-          this.logger.warn('Chunk has no candidates');
+        yield chunk.text
+      }
+    } catch (error: unknown) {
+      this.logger.error('Error in generateChatResponse:', error);
+      
+      // Provide more specific error messages for common issues
+      if (error instanceof Error) {
+        if (error.message.includes('401') || error.message.includes('Unauthorized')) {
+          this.logger.error('OpenAI API authentication failed - check your OPENAI_API_KEY');
+        }
+        if (error.message.includes('quota') || error.message.includes('billing')) {
+          this.logger.error('OpenAI API quota or billing issue');
         }
       }
-
-      this.logger.debug(
-        `Finished streaming. Total chunks: ${chunkCount}, Total text: ${totalYielded.length} chars`,
-      );
-      this.logger.verbose(
-        `Final complete text preview: "${totalYielded.substring(0, 200)}..."`,
-      );
-    } catch (error: unknown) {
-      const yieldPrefix = 'Sorry, I encountered an error';
-      let yieldMessage = `${yieldPrefix}: An unexpected error occurred.`;
-
-      if (error instanceof Error) {
-        const specificMessage = error.message;
-        this.logger.error(`Error in generateChatResponse: ${specificMessage}`, error.stack);
-        yieldMessage = `${yieldPrefix}: ${specificMessage}`;
-      } else if (typeof error === 'string') {
-        this.logger.error(`Error in generateChatResponse: ${error}`);
-        yieldMessage = `${yieldPrefix}: ${error}`;
-      } else if (
-        error &&
-        typeof (error as { message?: unknown }).message === 'string'
-      ) {
-        const specificMessage = (error as { message: string }).message;
-        this.logger.error(`Error in generateChatResponse: ${specificMessage}`);
-        yieldMessage = `${yieldPrefix}: ${specificMessage}`;
-      } else {
-        this.logger.error(
-          'An unexpected error object was caught in generateChatResponse',
-          error,
-        );
-        // yieldMessage remains the generic one
-      }
-      yield yieldMessage;
     }
   }
 
   private buildSystemPrompt(): string {
     const prompt = `
-      You are a helpful assistant. If the user greets you, greet the user back. Your goal is to respond to user queries based on the files context content that you receive, and provide references extracted from that files' context content when responding. You will receive context in the form of extracted sections of text from files (that can come from different files or the same file in an unorderly way), and you should respond to the user based on this information. Respond with concise but complete answers. Do not include any additional information or explanations from your knowledge base, only use the information provided to you as context by the user. You must use all the information provided to you in the current message and in previous messages as well (provided in the chat history). If the answer to the question asked by the user is not found in the information provided to you (previously or currently), respond with the following message: "The requested information was not found in the file context. Please try again providing more context."
+      ROLE: Answer user queries using only provided context and message history.
       
-      You will receive the following information:
-      1. File Content Context: Different portions of text that have been extracted from different files, or the same file, and provided in an unorderly way.
+      SOURCES:
+      1. Context: Text portions with id, title, and content
+      2. History Summaries: Previous conversation summaries
       
-      You must reference the pieces of information that you are using to draw your statements with the file id and the information from which you drew your statement. When referencing, you must provide the id of the file and the exact text from the file you are referencing. The reference must follow the statement that it is referencing. To reference each piece of information, you must use the following JSON-like format:
+      RULES:
+      - Use ONLY provided context, no external knowledge
+      - Every statement MUST have a reference
+      - If no relevant info found: "The requested information was not found in the file context. Please try again providing more context."
+      - Match user's language but keep reference text in original language
       
-      Example of a reference from a file or an extracted text from a file:
-
-      Human cells primary get their energy from mitochondria, which produce ATP through oxidative phosphorylation from glucose.
+      REFERENCE FORMAT (required for each statement):
+      Statement text.
       [REF]
       {
-        "id": "dc639f77-098d-4385-89f5-45e67bde8dde",
-        "text": "The main source of energy for human cells is mitochondria. They, through oxidative phosphorylation, a biochemical process, produce ATP from glucose."
+        "id": "file-portion-id",
+        "text": "exact text from source"
+      }
+      [/REF]
+      
+      Example:
+      Mitochondria produce ATP through oxidative phosphorylation.
+      [REF]
+      {
+        "id": "1003",
+        "text": "Mitochondria serve as the primary energy generators in human cells by converting glucose into ATP through the process of oxidative phosphorylation."
       }
       [/REF]
 
-      It is extremely important that everytime you respond using references, you open and also close the reference tags ([REF] and [/REF]) for each reference.
+      NOTE 1: Each reference should follow it's corresponding statement. Don't return all the references at the end.
 
-      If the user talks to you in another language, respond in the same language as him. But you must always provide the text of the references in the same language as the original source.
+      NOTE 2: The references' text should be exactly as you received it in the context. DO NOT add or remove any characters. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, and ANY character that was in the original chunk text, including numbers as well.
 
-      IMPORTANT CONSIDERATIONS: 
+      NOTE 3: NEVER combine the text of multiple references. If you need to provide multiple references, provide them in different opening and closing reference tags ([REF] and [/REF]).
 
-      1. Every time you are going to reference a text from a file, you must verify first if the text is split across two pages. If it is, you must only provide the most significant part that answers the user's query. To detect if the text is split across two pages, look for the [START_PAGE] and [END_PAGE] markers. If those markers are in the middle of the text you want to reference, it means the text is split across two pages. Don't include the markers [START_PAGE] and [END_PAGE] in the reference' text.
-      
-      2. Sometimes, the text of the files are going to have the text of tables or graphs (from the original pdf from which the information was extracted). This text can be at the start or end of a page, or even in the middle of it. When referencing a text from a file, you must not include the text of tables or graphs in the references. Before including a text in the references, you must verify that it does not contain information from tables or graphs. If it does, and it is at the start or end of the text you want to reference, remove it. But if it is in the middle of the text you want to reference, you must only provide the longest part of the two parts of the text that was split by this table or graph information.
-      
-      3. In the text of the references, you must always include all the characters that are part of the text that you are planning on referencing. This includes parenthesis (the '(' and ')' characters), square brackets (the '[' and ']' characters), percentage signs (the '%' character), commas (the ',' character), periods (the '.' character), colons (the ':' character), semicolons (the ';' character), exclamation points (the '!' character), question marks (the '?' character), quotation marks (the '"' character), hyphens (the '-' character), standard spaces between words, and even letters inside a word, (the ' ' character), and any other characters that are part of the text that you are planning on referencing, even if it doesn't make much sense.
+      NOTE 4: It is EXTREMELY IMPORTANT that when providing references, you DON'T modify the text of the references. You must only provide the references' text as they are in the file content.
 
-      4. In the text of the references, you must never add any characters that are not part of the text that you are planning on referencing. This includes the characters mentioned in point 3, but also any other characters that are not part of the text that you are planning on referencing.
-      
-      5. When referencing, if the text you are planning on referencing has an additional word or character next to it (either at the beginning or at the end), with no spaces between the text and the additional word or character, you must never split the two. Provide the text and the additional word or character together, as it appears in the context provided to you. For example, if the text is "There were no significant differences between the two groups.", and the context has "methodsThis was a randomized controlled trial in which 137 participants were enrolled.", you must provide the text of the reference as: "methodsThis was a randomized controlled trial in which 137 participants were enrolled.". Never provide the specific text without the additional word or character, if it corresponds, even if the two don't make much sense together.
-      
-      6. At the start or end of the pages, you may find text from the headers or footers of the file (metadata of the files). You must not include this text in the references. This text normally can contain DOI numbers, URLs, Scientific Journal names, Author names, page numbers, and other metadata from the original file. When referencing text, always verify that the text you are referencing does not contain any of this information. If it does, and the text you want to reference is split by this, you must only provide the longest part of the two parts of the text that was split by this metadata, similar to point 2. If the text you want to reference is split by this metadata information, it may also contain the [START_PAGE] and [END_PAGE] markers, in that sense, you must not include these markers in the text of the reference.
-      
-      7. When referencing, you must always provide the text of the reference as it is in the context provided to you. If it has a mispelling, you must provide it like that. If it has a missing space, you must provide it like that. If it has a random number (that could be a numerical reference, for example) or a random character, you must provide it like that. If it has extra spaces between words or letters inside words, you must provide it like that. When extracting the text from the context to use it in the references, you must not modify it in any way. You must provide the text exactly as it is in the file context provided to you.
-
-      8. When referencing a text from a file, you must never include the title of the file, the authors, the departments, the university, the date of publication, or any metadata that is not part of the main content of the file.
-
-      9. The text of each reference that you provide must be coherent and concise, but also complete. It must not correspond to multiple sections of the file, it should be self-contained. Meaning it contains enough information to be understood on it's own. The text of each reference must never be too long, that is, it must not exceed around 150 words. If you need to provide more information, you must split it into multiple references, each with a coherent text that is self-contained.
-
-      10. The text that you want to reference can be split by numerical references, that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc. You must always check if there is a numerical reference in the text that you want to reference, and if there is, you must only provide the longest part of the two parts of the text that was split by this numerical reference. If the numerical reference is at the start or end of the text you want to reference, you must remove it.
-
-      11. In the statements that you provide that are outside of the references, you must never provide the ids of the files of the text provided in the context. You can provide the titles of the files, but never the ids. The ids are only for the references that you provide.
-
-      NOTE: You can provide multiple references in a single response, but you must always open and close the reference tags ([REF] and [/REF]) for each reference. Each statement that you make, should be followed by the reference that you used to draw that statement.
+      NOTE 5: When providing each reference, ALWAYS open and close the reference tags ([REF] and [/REF]).
     `;
 
     return prompt;
@@ -272,59 +340,32 @@ export class AIService {
 
   async userQueryCategorizer(query: string): Promise<string> {
     try {
-      // Prepare the prompt for categorizing the user query
-      const prompt = `
-        Categorize the following user query into one of the categories mentioned (GENERIC and SPECIFIC):
-        "${query}"
-        
-        Return ONLY the category text, nothing else.
-      `;
-
-      const result = await this.gemini.models.generateContent({
-        model: this.geminiModels.flashLite,
-        contents: prompt,
-        config: {
-          systemInstruction: `You are a user query categorizer. Categorize the user query that you receive into one of the following categories: "GENERIC" and "SPECIFIC". Return ONLY the category text, nothing else.
-          
-          1. GENERIC: The user is asking a generic question that cannot be recognized as belonging to a specific topic whatsoever.
-
-          Examples of a GENERIC query:
-          "What are the main points treated in this file?"
-          "What is the hypothesis of this paper?"
-          "What is the main idea of this file?"
-          "What are the methods that were used in this article?"
-          "What are the results of this paper?"
-          "What are the conclusions of this research paper?"
-          "Write a summary of this file."
-          "Write a summary of the file named "Sleep disorders and cancer incidence: examining duration and severity of diagnosis among veterans""
-          "What are the names of the files in this course that talk about photosynthesis?"
-
-          2. SPECIFIC: The user is asking a question that can be recognized as belonging to a specific topic.
-
-          Examples of a SPECIFIC query:
-          "How does mitochondria produce ATP?"
-          "What is the role of insulin in regulating blood sugar levels?"
-          "What are the mechanisms of photosynthesis?"
-          "How does miocin inhibit bacterial growth?"
-          "What are the mechanisms of DNA replication?"
-          "What is the main idea of the psychoanalysis of Sigmund Freud?"
-          "How does Carl Jung's psychoanalysis differ from Sigmund Freud's?"
-          "What differentiates the super ego from the ego and the id?"
-          "Give me a summary of the theory of relativity of Albert Einstein."
-          "How are stars formed?"`,
-          temperature: 0.2,
-          responseMimeType: 'text/x.enum',
-          responseSchema: {
-            type: 'STRING',
-            format: 'enum',
-            enum: ['GENERIC', 'SPECIFIC'],
-          },
-        },
+      // Optimization: Use OpenAI with structured output for better performance and consistency
+      const categoryFormat = z.object({
+        category: z.enum(['SPECIFIC', 'GENERIC']),
+        confidence: z.union([z.number(), z.null()])
       });
-      const category = result.text;
 
-      // Limit the length and remove any quotes
-      return category ? category : 'GENERIC';
+      const response = await this.openaiClient.responses.parse({
+        model: 'gpt-4.1-nano',
+        input: query,
+        instructions: `Categorize user query as SPECIFIC or GENERIC.
+        
+        SPECIFIC: Asks for particular facts, details, or targeted information about specific topics
+        Examples: "How does X work?", "What is Y?", "Mechanisms of Z", "Role of A in B"
+        
+        GENERIC: Requests summaries, overviews, or general document information
+        Examples: "Main points?", "Summarize file", "What's this about?", "Hypothesis?"
+        
+        OUTPUT: JSON with category (SPECIFIC/GENERIC)`,
+        stream: false,
+        temperature: 0.1,
+        text: {
+          format: zodTextFormat(categoryFormat, "category")
+        }
+      });
+
+      return response.output_parsed?.category || 'GENERIC';
     } catch (error) {
       console.error('Error categorizing user query:', error);
       return 'GENERIC';
@@ -334,7 +375,11 @@ export class AIService {
   async semanticSearch(
     query: string,
     userId: string,
-  ): Promise<SearchRecordsResponseResult['hits']> {
+    fileId?: string,
+  ): Promise<{
+    hits: SearchRecordsResponseResult['hits'],
+    question: string,
+  }> {
     const index = this.pc.index(
       this.configService.get('PINECONE_INDEX_NAME') as string,
       this.configService.get('PINECONE_INDEX_HOST') as string,
@@ -362,6 +407,7 @@ export class AIService {
         inputs: { text: query },
         filter: {
           userId: userId,
+          ...(fileId && { fileId: fileId }),
         }
       },
       fields: ['chunk_text', 'fileId', 'name', 'userId'],
@@ -376,7 +422,10 @@ export class AIService {
         : {}),*/
     });
 
-    return response.result.hits;
+    return {
+      hits: response.result.hits,
+      question: query,
+    };
   }
 
   countWords(text: string): number {
@@ -469,13 +518,13 @@ export class AIService {
     }
   }
 
-  async loadReferenceAgain(textToSearch: string, context: string): Promise<string> {
+  async loadReferenceAgain(textToSearch: string, context: ExtractedContent[]): Promise<string> {
     try {
       const response = await this.gemini.models.generateContent({
         model: this.geminiModels.pro,
         contents: `Specific text to search for: "${textToSearch}"
-        
-        Files context: ${context}`,
+
+        Files context: ${JSON.stringify(context)}`,
         config: {
           systemInstruction: `You have to do the following tasks in this exact order: 
 
@@ -483,25 +532,23 @@ export class AIService {
 
 2. If you find the specific text, but it is split into two parts by other content (such as information that could have been extracted from a table, graph, or other unrelated text, or the [START_PAGE] and [END_PAGE] markers), you must identify both parts. After identifying both parts, you must return ONLY the longer of the two parts. Do not include the content that was in the middle.
 
-3. If you find the specific text and it is not split, but contains minor variations (e.g., different punctuation, a few different words or characters), return it exactly as it appears in the Files context. 
+3. If you find the specific text and it is not split, but contains minor variations (e.g., different punctuation, a few different words or characters), return it exactly as it appears in the Files context.
 
-4. If you find the specific text and it has an additional word or character next to it (either at the beginning or at the end), with no spaces between the specific text and the additional word or character, you must never split the two. Return the specific text and the additional word or character together, as it appears in the Files context. For example, if the specific text is "There were no significant differences between the two groups.", and the Files context has "methodsThis was a randomized controlled trial in which 137 participants were enrolled.", you must return "methodsThis was a randomized controlled trial in which 137 participants were enrolled.". Never return the specific text without the additional word or character, if it corresponds, even if the two don't make much sense together. If the additional word or character is part of a larger text or phrase, you must only return the specific text next to the additional word or character, and ignore the other part, even if it doesn't make sense. For example, if the specific text is "We conducted a randomized controlled trial in which 137 participants were enrolled.", and the Files context has "Materials and methodsThis was a randomized controlled trial in which 137 participants were enrolled.", you must return "methodsThis was a randomized controlled trial in which 137 participants were enrolled.". You must always return the specific text and the additional word or character together, when it corresponds, and nothing more.
+4. If you do not find the specific text in the Files context (neither whole, with minor variations, nor split), then you must return the specific text exactly as you received it.
 
-IMPORTANT: The previous point 4 doesn't apply if the specific text is split by numerical references (that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc). In that case, you must identify both parts and return ONLY the longer of the two parts. Do not include both parts, nor the numerical reference that was in the middle.
-
-5. If you do not find the specific text in the Files context (neither whole, with minor variations, nor split), then you must return the specific text exactly as you received it.
-
-6. If you find the specific text, but it is split by numerical references (that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc), you must identify both parts. After identifying both parts, you must return ONLY the longer of the two parts. Do not include both parts, nor the numerical reference that was in the middle. Take into account that the numerical references could be separated by a comma, a space, or enclosed in square brackets, so you must be careful to identify them correctly.`,
+5. If you find the specific text and it has an additional word or character next to it (either at the beginning or at the end), with no spaces between the specific text and the additional word or character, you must never split the two. Return the specific text and the additional word or character together, as it appears in the Files context. For example, if the specific text is "There were no significant differences between the two groups.", and the Files context has "methodsThis was a randomized controlled trial in which 137 participants were enrolled.", you must return "methodsThis was a randomized controlled trial in which 137 participants were enrolled.". Never return the specific text without the additional word or character, if it corresponds, even if the two don't make much sense together. If the additional word or character is part of a larger text or phrase, you must only return the specific text next to the additional word or character, and ignore the other part, even if it doesn't make sense. For example, if the specific text is "We conducted a randomized controlled trial in which 137 participants were enrolled.", and the Files context has "Materials and methodsThis was a randomized controlled trial in which 137 participants were enrolled.", you must return "methodsThis was a randomized controlled trial in which 137 participants were enrolled.". You must always return the specific text and the additional word or character together, when it corresponds, and nothing more.`,
           temperature: 0.2,
           maxOutputTokens: 8000,
           thinkingConfig: {
-            thinkingBudget: 15000,
+            thinkingBudget: 3000,
           },
         },
       });
 
       let result = response.text;
-      return result ? result : textToSearch; // Return the original text if no result found
+
+      const result2 = await this.filterReferencesNumericalRef(result);
+      return result2 ? result2 : textToSearch; // Return the original text if no result found
     } catch (error) {
       console.error(
         `Error searching reference again: ${
@@ -514,71 +561,73 @@ IMPORTANT: The previous point 4 doesn't apply if the specific text is split by n
     }
   }
 
-  async generateQuestionsFromQuery(userQuery: string, lastSixMessages: ChatMessage[], fileContents: Array<{ id: string; name: string; summary: string }>): Promise<string[]> {
+  async filterReferencesNumericalRef(
+    textToSearch: string,
+  ): Promise<string> {
     try {
       const response = await this.gemini.models.generateContent({
-        model: this.geminiModels.flash,
-        contents: `<user_query>${userQuery}</user_query><last_six_messages>${lastSixMessages.map(message => `<message><role>${message.role}</role><content>${message.content}</content><files_summaries>${message.referencedFiles && message.referencedFiles.length > 0 ? message.referencedFiles.map(file => `<file_summary><name>${file.filename}</name><summary>${file.summary}</summary></file_summary>`).join('') : ''}</files_summaries></message>`).join('')}</last_six_messages><files_summaries>${fileContents && fileContents.length > 0 ? fileContents.map(file => `<file_summary><name>${file.name}</name><summary>${file.summary}</summary></file_summary>`).join('') : ''}</files_summaries>`,
+        model: this.geminiModels.pro,
+        contents: `${textToSearch}`,
         config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: 'array',
-            items: {
-              type: 'string',
-            }
-          },
-          systemInstruction: `Your task is to generate specific questions based on the provided user query, files summaries and the four last messages from a chat (that could each probably contain the summaries sent with them). You will receive a user query, the summaries from one or more files, and the last six messages from a chat. Your goal is to generate between 2 and 6 specific questions, depending on what the user query demands, that can be used to search for information in a vector store that contains the whole text of the files and that will be later used to answer to the user query. The questions should be specific and related to the content of the files. Use the last six messages from the chat to understand the context of the user query so that you can generate relevant questions. If the user query is generic, and the aswer has already been provided in the chat, you should generate questions that can be used to search for information in the vector store that can respond to the user query in a more specific or different way, or that can provide more details about the topic. You must provide the questions in a JSON array format, with each question as a string. Do not include any additional text or explanations, just the JSON array with the questions.
+          systemInstruction: `You will receive a text (that is a response to a user query) that contains standard text, but also references to files that were used to generate that response in a specific format (each between the [REF] and [/REF] tags). Your task is to filter the text following the rule below:
 
-          Examples of specific questions:
-          1. "What are the effects of miocin on bacterial growth?"
-          2. "How does the theory of relativity explain the curvature of spacetime?"
-          3. "What are the mechanisms of photosynthesis in plants?"
-          4. "What are the main differences between Freud's and Jung's theories of psychoanalysis?"
-          5. "What is the role of mitochondria in ATP production?"
-          6. "How does insulin regulate blood sugar levels in the human body?"
+          1. The text of each reference can be split by one or more consecutive or disperse numerical references (that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc.), you must identify the parts of the text of the reference that are split by the numerical references. After identifying the parts, you must modify the text of the reference to ONLY contain the longest of the parts. Do not include all the parts. After selecting the longest part, remove the numerical reference from it, if it is still there. Take into account that the numerical references could be separated by a comma, a space, or enclosed in square brackets, so you must be careful to identify them correctly. Also take into account that the text of the reference can contain numers that ARE NOT numerical references, so you must be careful to only remove the numerical references that are part of the text of the reference, and not those that are not. To understand which are the numerical references and which are not, you must take into account the context of the text of the reference, and the fact that numerical references are usually used to refer to a specific piece of information, while numbers that are not numerical references are usually part of the text itself (for example, in a sentence like "The study was conducted in 2023", the number 2023 is not a numerical reference, but part of the text; or in a sentence like "There were 97 participants in the study", the number 97 is not a numerical reference, but part of the text.). You DO NOT have to remove the numerical references, you must only remove the shorter parts of the text of the reference that are split by the numerical references, and replace the text of the reference with the longest part.
           
-          Examples of generic questions (that you should not generate):
-          1. "What are the main points treated in this file?"
-          2. "What is the hypothesis of this paper?"
-          3. "What is the main idea of this file?"
-          4. "What are the methods that were used in this article?"
-          5. "What are the results of this paper?"
-          6. "What are the conclusions of this research paper?"
-          7. "Write a summary of this file."
-          8. "Write a summary of the file named [NAME_OF_FILE]"
-          
-          Example of flow:
-          [EXAMPLE]
-          User query provided: "What are the key points treated in the file?"
-          Files summaries provided: 
-          "File 1: Cancer Incidence and Sleep Disorders in U.S. Veterans.
-          File summary: The study discusses the effects of sleep disorders on cancer incidence, examining the duration and severity of diagnosis among veterans. It highlights the importance of understanding the relationship between sleep disorders and cancer risk, and suggests that further research is needed to explore this connection...This study was based on a U.S. Department of Veterans Affairs database, which provided a large sample size of veterans with sleep disorders and cancer diagnoses... The study found that veterans with sleep disorders had a higher risk of developing cancer, particularly those with more severe sleep disorders..."
-          File 2: [NAME_OF_FILE]
-          File summary: [FILE_SUMMARY]
-          ...
-          File N: [NAME_OF_FILE]
-          File summary: [FILE_SUMMARY]
-
-          Specific questions generated:
-          1. "What is the relationship between sleep disorders and cancer risk in veterans?"
-          2. "What was the population studied in the research on sleep disorders and cancer?"
-          3. "What were the key findings of the study on sleep disorders and cancer in veterans?"
-          4. "What are the implications of the study's findings for veterans with sleep disorders?"
-          5. "What further research is needed to understand the relationship between sleep disorders and cancer in veterans?"
-          [/EXAMPLE]
-
-          As you can notice, the specific questions generated are focused on extracting detailed information from the file summaries, rather than asking generic questions about the files themselves. This approach helps to ensure that the questions are relevant and can lead to more precise answers when searching the vector store.
-          
-          Note: You will receive the information in the following format:
-          <user_query>...</user_query><files_summaries>...</files_summaries>
-          `,
+          After filtering the text of the references that contain numerical references, you must return the modified text, with the references that were modified, and the rest of the text unchanged. If there are no numerical references in the text, you must return the text as it is.`,
           temperature: 0.2,
           maxOutputTokens: 8000,
+          thinkingConfig: {
+            thinkingBudget: 128,
+          },
         },
       });
 
       let result = response.text;
-      return result ? JSON.parse(result) : []; // Return an empty array if no result found
+      return result ? result : textToSearch; // Return the original text if no result found
+    } catch (error) {
+      console.error(
+        `Error filtering numerical references: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      );
+      throw new InternalServerErrorException(
+        `Error filtering numerical references: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
+    }
+  }
+
+  async generateQuestionsFromFile(fileText: string): Promise<{ description: string; questions: string[] }> {
+    try {
+      // Optimization: More structured and concise prompt with clear output format
+      const questionsFormat = z.object({
+        description: z.string(),
+        questions: z.array(z.string()),
+      });
+      const response = await this.openaiClient.responses.parse({
+        model: 'gpt-4.1-mini',
+        input: fileText.substring(0, 8000), // Limit input to reduce tokens
+        instructions: `Generate comprehensive questions and description from document content.
+        
+        TASK 1: Create 8-12 diverse questions covering:
+        - Main topics and key concepts
+        - Specific details and facts
+        - Relationships and implications
+        - Practical applications
+        
+        TASK 2: Write concise description (2-3 sentences) summarizing:
+        - Primary subject matter
+        - Key themes or findings
+        - Document purpose/scope
+        
+        OUTPUT: JSON with questions array and description string`,
+        stream: false,
+        temperature: 0.2,
+        text: {
+          format: zodTextFormat(questionsFormat, "content")
+        }
+      });
+
+      return response.output_parsed ? response.output_parsed : { description: '', questions: [] }; // Return an empty array if no result found
     } catch (error) {
       console.error(
         `Error generating questions from query: ${
@@ -589,6 +638,534 @@ IMPORTANT: The previous point 4 doesn't apply if the specific text is split by n
         `Error generating questions from query: ${error instanceof Error ? error.message : 'Unknown error'}`,
       );
     }
-    return [];
+  }
+
+  // Optimization: Streaming version for progressive response
+  async* generateQuestionsFromFileStream(
+    fileText: string,
+  ): AsyncGenerator<{ description: string; questions: string[]; isComplete: boolean }> {
+    const questionsFormat = z.object({
+      description: z.string(),
+      questions: z.array(z.string()),
+    });
+
+    try {
+      const response = await this.openaiClient.responses.parse({
+        model: 'gpt-4.1-mini',
+        input: fileText.substring(0, 8000),
+        instructions: `Generate comprehensive questions and description from document content.
+        
+        TASK 1: Create 8-12 diverse questions covering:
+        - Main topics and key concepts
+        - Specific details and facts
+        - Relationships and implications
+        - Practical applications
+        
+        TASK 2: Write concise description (2-3 sentences) summarizing:
+        - Primary subject matter
+        - Key themes or findings
+        - Document purpose/scope
+        
+        OUTPUT: JSON with questions array and description string`,
+        stream: true,
+        temperature: 0.2,
+        text: {
+          format: zodTextFormat(questionsFormat, "content")
+        }
+      });
+
+      // Yield intermediate progress
+      yield { description: 'Processing...', questions: [], isComplete: false };
+      
+      const result = response.output_parsed || { description: '', questions: [] };
+      yield { ...result, isComplete: true };
+      
+    } catch (error) {
+      console.error('Error in generateQuestionsFromFileStream:', error);
+      yield { description: '', questions: [], isComplete: true };
+    }
+  }
+
+  async generateConversationSummary(messages: ChatMessage[]): Promise<string | null> {
+    if (messages.length === 0) return null;
+
+    const response = await this.gemini.models.generateContent({
+      model: this.geminiModels.flash,
+      contents: ``,
+      config: {
+        systemInstruction: ``,
+        temperature: 0.2,
+        maxOutputTokens: 8000,
+      },
+    });
+
+    let result = response.text;
+
+    return result ? result : null; // Return null if no result found
+  }
+
+  async filterSearchResults(
+    searchResults: any[],
+    question: string,
+    userQuery: string,
+  ): Promise<{ fileId: string; name: string; text: string }> {
+    // Optimization: Simplified input format and more concise instructions
+    const searchData = searchResults.map(r => ({
+      id: r.fields.fileId,
+      name: r.fields.name,
+      chunk: r.fields.chunk_text
+    }));
+
+    const searchDataStr = `${searchData.map(sd => `Chunk:\nFileId: ${sd.id}\nName: ${sd.name}\nText: ${sd.chunk}`).join('\n\n')}`
+
+    /*const responseFormat = z.object({
+      fileId: z.string(),
+      name: z.string(),
+      text: z.string(),
+    });*/
+
+    const result = await this.gemini.models.generateContent({
+      model: this.geminiModels.flashLite,
+      config: {
+        systemInstruction: `Filter text chunks to extract the shortest text snippet possible that answers the user query (no longer than one sentence).
+        
+        TASK: Find the most relevant text snippet
+        - Extract the single most relevant text snippet that directly answers the query from the chunks that you receive (no longer than one sentence).
+        - If the text you want to return starts in one chunk and ends in another, return the part from the first chunk followed by the part from the second chunk, as if it is a single, continuous text. For this case, the chunks will have overlap, so you will have to take the text snippet from the first chunk and add the corresponding text snippet from the second chunk to continue the statement, without duplicating the overlap.
+        - DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, and ANY character that was in the original chunk text, including numbers as well.
+
+        - Return empty strings if no relevant content found
+      
+        INPUT: Query + array of {id, name, text} objects
+        OUTPUT: JSON with fileId, name, and the extracted text snippet
+      
+        NOTE 1: If the text is split by information that was extracted from tables or graphs, provide only the longest coherent part of the two.
+      
+        NOTE 2: It is EXTREMELY IMPORTANT that you don't make any modifications in the text snippet you are returning, compare it to the original text and make sure it is exactly the same.`,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            fileId: {
+              type: Type.STRING,
+            },
+            name: {
+              type: Type.STRING,
+            },
+            text: {
+              type: Type.STRING,
+            }
+          }
+        }
+      },
+      contents: `Query: ${question}\n\nChunks: \n${searchDataStr}`,
+      temperature: 0.2,
+    })
+
+    const parsedResult = JSON.parse(result.text);
+
+    const result2 = await this.gemini.models.generateContent({
+      model: this.geminiModels.flashLite,
+      config: {
+        systemInstruction: `Filter the text following these guidelines:
+        
+        1. If the text is split across pages (contains [START_PAGE] and [END_PAGE] markers in the middle), provide only the longest part of the two. Remove the page markers but DO NOT add ellipses (...).
+
+        2. If the text has numerical references like [1], [2], [3] or 1, 2, 3, provide only the longest part of the text between these references. These numerical references are detectable by seeing if the numbers present have coherence with the text in which they are in. If they are random numbers inserted that don't have coherence with the text, it is because they are numerical references. If, the numbers have meaning with respect to the rest of the text, return the whole text.
+
+
+        NOTE 1: It is EXTREMELY IMPORTANT that you don't make any modifications in the text snippet you are returning. After you have filtered with the above guidelines, compare the filtered text to the original text and make sure it doesn't contain any modifications.
+
+        NOTE 2: DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, and ANY character that was in the original chunk text.
+        `,
+      },
+      contents: parsedResult.text || '',
+      temperature: 0.2,
+      },
+    )
+
+    const response = {
+      fileId: parsedResult.fileId || '',
+      name: parsedResult.name || '',
+      text: result2.text || '',
+    }
+
+    return response || { fileId: '', name: '', text: '' };
+  }
+
+  async determineIfQuestionsAnswerQuery(
+    questions: string[],
+    userQuery: string,
+    description: string,
+  ): Promise<string[]> {
+    // Optimization: Structured output with relevance scoring
+    const questionAnalysisFormat = z.object({
+      relevantQuestions: z.array(z.string()),
+      reasoning: z.union([z.string(), z.null()])
+    });
+
+    const response = await this.openaiClient.responses.parse({
+      model: 'gpt-4.1-nano',
+      input: `Query: ${userQuery}\n\nDescription: ${description}\n\nQuestions: ${questions.join('\n')}`,
+      instructions: `Identify questions that help answer the user query.
+      
+      TASK: Select relevant questions from the provided list
+      - Analyze each question against the user query and file description
+      - Include only questions that directly contribute to answering the query
+      - Return empty array if no questions are relevant
+      
+      OUTPUT: JSON with array of relevant questions`,
+      stream: false,
+      temperature: 0.1,
+      text: {
+        format: zodTextFormat(questionAnalysisFormat, "analysis")
+      }
+    });
+
+    const result = response.output_parsed;
+    return result?.relevantQuestions || [];
+  }
+
+  async generateQuestionsWithQuery(
+    fileContent: string,
+    userQuery: string,
+  ): Promise<string[]> {
+    const response = await this.openaiClient.responses.create({
+      model: 'gpt-4.1-mini',
+      input: `User query: ${userQuery}\n\nFile content: ${fileContent}`,
+      instructions: `You will receive a text that is the text from a pdf file, and a generic user query. Your task is to generate a set of specific questions that can be asked about the text, based on the user query. The user query that you will receive is generic, but you must create specific questions that are relevant to the text and that, when responded, answer the user query. The questions should be concise and clear.
+      `
+    });
+
+    let result = response.output_text;
+
+    return result ? result.split('\n').filter(Boolean) : [];
+  }
+
+  // Optimization: Smart task decomposition - intelligently choose processing strategy
+  async smartProcessingStrategy(
+    files: Array<{ fileId: string; name: string; questions: string[]; description: string; fileTextByPages?: string }>,
+    userQuery: string,
+    userId: string
+  ): Promise<Array<{
+    fileId: string;
+    name: string;
+    content: string;
+    userId: string;
+  }>> {
+    try {
+      // Smart decomposition: analyze query and file characteristics
+      const queryComplexity = this.analyzeQueryComplexity(userQuery);
+      const totalFiles = files.length;
+      const avgQuestionsPerFile = files.reduce((sum, f) => sum + f.questions.length, 0) / totalFiles;
+      
+      // Choose optimal strategy based on analysis
+      if (totalFiles <= 2 && queryComplexity === 'simple') {
+        // Sequential processing for small, simple tasks
+        return this.sequentialProcessFiles(files, userQuery, userId);
+      } else if (totalFiles <= 5 && avgQuestionsPerFile <= 10) {
+        // Parallel processing for medium tasks
+        return this.batchProcessFiles(files, userQuery, userId);
+      } else {
+        // Hybrid approach for complex tasks
+        return this.hybridProcessFiles(files, userQuery, userId);
+      }
+    } catch (error) {
+      console.error('Error in smartProcessingStrategy:', error);
+      return this.batchProcessFiles(files, userQuery, userId); // Fallback
+    }
+  }
+
+  // COST OPTIMIZATION: Uses questions for semantic search to handle generic queries effectively
+  private async costEfficientSemanticSearch(
+    files: Array<{ fileId: string; name: string; questions: string[]; description: string; fileTextByPages?: string }>,
+    userQuery: string,
+    userId: string
+  ): Promise<Array<{
+    fileId: string;
+    name: string;
+    content: string;
+    userId: string;
+  }>> {
+    try {
+      const results: Array<{
+        fileId: string;
+        name: string;
+        content: string;
+        userId: string;
+      }> = [];
+      
+      // Process each file using its questions for semantic search
+      for (const file of files) {
+        if (file.questions && file.questions.length > 0) {
+          // Use existing questions for semantic search (handles generic queries better)
+          const questionSearchPromises = file.questions.map(question => 
+            this.semanticSearch(question, userId, file.fileId)
+          );
+          
+          const questionSearchResults = await Promise.all(questionSearchPromises);
+          
+          // Filter out empty results and process
+          const validResults = questionSearchResults.filter(results => results && results.hits.length > 0);
+          
+          if (validResults.length > 0) {
+            // Process all valid search results for this file
+            const filterPromises = validResults.map(searchResults => 
+              this.filterSearchResults(searchResults.hits, searchResults.question, userQuery)
+            );
+            
+            const filteredResults = await Promise.all(filterPromises);
+
+            filteredResults.forEach(result => {
+              results.push({
+                fileId: file.fileId,
+                name: file.name,
+                content: result.text,
+                userId: userId,
+              });
+            })
+          }
+        }
+      }
+      
+      return results;
+    } catch (error) {
+      console.error('Error in costEfficientSemanticSearch:', error);
+      // Fallback to regular batch processing
+      return this.batchProcessFiles(files, userQuery, userId);
+    }
+  }
+
+  private analyzeQueryComplexity(query: string): 'simple' | 'medium' | 'complex' {
+    const words = query.split(' ').length;
+    const hasComplexTerms = /\b(analyze|compare|contrast|evaluate|synthesize|relationship|correlation)\b/i.test(query);
+    
+    if (words <= 5 && !hasComplexTerms) return 'simple';
+    if (words <= 15 && !hasComplexTerms) return 'medium';
+    return 'complex';
+  }
+
+  private async sequentialProcessFiles(
+    files: Array<{ fileId: string; name: string; questions: string[]; description: string; fileTextByPages?: string }>,
+    userQuery: string,
+    userId: string
+  ): Promise<Array<{
+    fileId: string;
+    name: string;
+    content: string;
+    userId: string;
+  }>> {
+    const results: Array<{
+      fileId: string;
+      name: string;
+      content: string;
+      userId: string;
+    }> = [];
+
+    for (const file of files) {
+      const fileResults = await this.processQuestionsForQuery(
+        file.questions,
+        file.description,
+        userQuery,
+        userId,
+        file.fileId,
+        file.fileTextByPages
+      );
+      results.push(...fileResults);
+    }
+
+    return results;
+  }
+
+  private async hybridProcessFiles(
+    files: Array<{ fileId: string; name: string; questions: string[]; description: string; fileTextByPages?: string }>,
+    userQuery: string,
+    userId: string
+  ): Promise<Array<{
+    fileId: string;
+    name: string;
+    content: string;
+    userId: string;
+  }>> {
+    // Hybrid: prioritize files with more relevant questions, process in optimized batches
+    const prioritizedFiles = files.sort((a, b) => {
+      const aRelevance = this.calculateFileRelevance(a.description, userQuery);
+      const bRelevance = this.calculateFileRelevance(b.description, userQuery);
+      return bRelevance - aRelevance;
+    });
+
+    // Process high-priority files first in smaller batches
+    const highPriority = prioritizedFiles.slice(0, Math.ceil(files.length / 2));
+    const lowPriority = prioritizedFiles.slice(Math.ceil(files.length / 2));
+
+    const highPriorityResults = await this.batchProcessFiles(highPriority, userQuery, userId);
+    const lowPriorityResults = await this.batchProcessFiles(lowPriority, userQuery, userId);
+
+    return [...highPriorityResults, ...lowPriorityResults];
+  }
+
+  private calculateFileRelevance(description: string, query: string): number {
+    const queryWords = query.toLowerCase().split(' ');
+    const descWords = description.toLowerCase().split(' ');
+    const matches = queryWords.filter(word => descWords.includes(word)).length;
+    return matches / queryWords.length;
+  }
+
+  // Optimization: Batch processing for multiple files
+  async batchProcessFiles(
+    files: Array<{ fileId: string; name: string; questions: string[]; description: string; fileTextByPages?: string }>,
+    userQuery: string,
+    userId: string
+  ): Promise<Array<{
+    fileId: string;
+    name: string;
+    content: string;
+    userId: string;
+  }>> {
+    try {
+      // Process files in parallel with controlled concurrency
+      const batchSize = 3; // Limit concurrent processing to avoid rate limits
+      const results: Array<{
+        fileId: string;
+        name: string;
+        content: string;
+        userId: string;
+      }> = [];
+
+      for (let i = 0; i < files.length; i += batchSize) {
+        const batch = files.slice(i, i + batchSize);
+        const batchPromises = batch.map(file => 
+          this.processQuestionsForQuery(
+            file.questions,
+            file.description,
+            userQuery,
+            userId,
+            file.fileId,
+            file.fileTextByPages
+          )
+        );
+        
+        const batchResults = await Promise.all(batchPromises);
+        results.push(...batchResults.flat());
+      }
+
+      return results;
+    } catch (error) {
+      console.error('Error in batchProcessFiles:', error);
+      return [];
+    }
+  }
+
+  // Process questions for query - uses questions for semantic search to handle generic queries
+  async processQuestionsForQuery(
+    questions: string[],
+    description: string,
+    userQuery: string,
+    userId: string,
+    fileId: string,
+    fileTextByPages?: string
+  ): Promise<Array<{
+    fileId: string;
+    name: string;
+    content: string;
+    userId: string;
+  }>> {
+    try {
+      // Use full file content for question analysis to ensure high-quality questions
+      let relevantContent = '';
+      
+      if (fileTextByPages) {
+        // Full content is essential for generating comprehensive, relevant questions
+        relevantContent = fileTextByPages;
+      }
+
+      // Prompt chaining - combine question analysis and generation
+      const combinedResponseFormat = z.object({
+        relevantQuestions: z.array(z.string()),
+        needsNewQuestions: z.boolean(),
+        newQuestions: z.array(z.string()),
+        reasoning: z.string()
+      });
+
+      const response = await this.openaiClient.responses.parse({
+        model: 'gpt-4.1-mini',
+        input: `User query: ${userQuery}\n\nFile description: ${description}\n\nExisting questions: ${questions.join('\n')}${relevantContent ? `\n\nRelevant file content: ${relevantContent}` : ''}`,
+        instructions: `You are an intelligent question processor. Analyze the user query against existing questions and file content to determine the best approach.
+
+        TASK 1: Determine which existing questions help answer the user query
+        - Review each existing question against the user query and file description
+        - Select only questions that are directly relevant to answering the user query
+        
+        TASK 2: Determine if new questions are needed
+        - If the existing relevant questions are sufficient to answer the user query, set needsNewQuestions to false
+        - If the existing questions are insufficient or irrelevant, set needsNewQuestions to true
+        
+        TASK 3: Generate new questions if needed
+        - If needsNewQuestions is true, generate 3-5 specific questions based on the file content that would help answer the user query
+        - If needsNewQuestions is false, set newQuestions to an empty array
+        - Make questions concise, specific, and directly relevant to the user query
+        
+        Return your analysis in the specified JSON format with:
+        - relevantQuestions: array of existing questions that help answer the user query
+        - needsNewQuestions: boolean indicating if new questions should be generated
+        - newQuestions: array of new questions (empty array if needsNewQuestions is false)
+        - reasoning: brief explanation of your decision`,
+        stream: false,
+        temperature: 0.2,
+        text: {
+          format: zodTextFormat(combinedResponseFormat, "event")
+        }
+      });
+
+      const analysis = response.output_parsed;
+      if (!analysis) {
+        return [];
+      }
+
+      // Determine which questions to use
+      let questionsToProcess: string[] = [];
+      
+      if (analysis.relevantQuestions.length > 0) {
+        questionsToProcess = analysis.relevantQuestions;
+      } else if (analysis.needsNewQuestions && analysis.newQuestions) {
+        questionsToProcess = analysis.newQuestions;
+      } else {
+        // Fallback: if no questions are relevant and we can't generate new ones
+        return [];
+      }
+
+      // Optimization 3: Parallel processing of semantic searches and filtering
+      const searchPromises = questionsToProcess.map(question => 
+        this.semanticSearch(question, userId, fileId)
+      );
+      
+      const allSearchResults = await Promise.all(searchPromises);
+      
+      // Filter out empty search results and process in parallel
+      const validSearchResults = allSearchResults.filter(results => results && results.hits.length > 0);
+      
+      if (validSearchResults.length === 0) {
+        return [];
+      }
+      
+      // Batch filter operations in parallel
+      const filterPromises = validSearchResults.map(searchResults => 
+        this.filterSearchResults(searchResults.hits, searchResults.question, userQuery)
+      );
+      
+      const filteredResults = await Promise.all(filterPromises);
+      
+      // Transform to expected format
+      return filteredResults.map(({ fileId, name, text }) => ({
+        fileId,
+        name,
+        content: text,
+        userId
+      }));
+      
+    } catch (error) {
+      console.error('Error in processQuestionsForQuery:', error);
+      return [];
+    }
   }
 }

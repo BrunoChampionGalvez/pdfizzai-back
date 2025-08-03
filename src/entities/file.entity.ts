@@ -36,6 +36,12 @@ export class File {
   @Column({ type: 'text', nullable: true })
   summary: string;
 
+  @Column({ type: 'text', nullable: true })
+  description: string;
+
+  @Column({ type: 'jsonb', nullable: true })
+  questions: string[];
+
   @Column({ type: 'text', array: true, nullable: true })
   chunks: string[];
 

@@ -49,6 +49,7 @@ import { PaymentService } from './services/payment.service';
 import { PaymentController } from './controllers/payment.controller';
 import { SubscriptionUsage } from './entities/subscription-usage.entity';
 import { SubscriptionPlan } from './entities/subscription-plan.entity';
+import { ExtractedContent } from './entities/extracted-content.entity';
 
 @Module({
   imports: [
@@ -64,13 +65,13 @@ import { SubscriptionPlan } from './entities/subscription-plan.entity';
         username: configService.get('DB_USERNAME', 'postgres'),
         password: configService.get('DB_PASSWORD', 'password'),
         database: configService.get('DB_NAME', 'refery_ai'),
-        entities: [User, Folder, File, ChatSession, ChatMessage, Subscription, Transaction, SubscriptionUsage, SubscriptionPlan],
+        entities: [User, Folder, File, ChatSession, ChatMessage, Subscription, Transaction, SubscriptionUsage, SubscriptionPlan, ExtractedContent],
         synchronize: configService.get('NODE_ENV') !== 'production',
         dropSchema: false,
       }),
       inject: [ConfigService],
     }),
-    TypeOrmModule.forFeature([User, Folder, File, ChatSession, ChatMessage, Subscription, Transaction, SubscriptionUsage, SubscriptionPlan]),
+    TypeOrmModule.forFeature([User, Folder, File, ChatSession, ChatMessage, Subscription, Transaction, SubscriptionUsage, SubscriptionPlan, ExtractedContent]),
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

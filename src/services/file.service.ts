@@ -9,9 +9,10 @@ import axios from 'axios';
 import { ConfigService } from '@nestjs/config';
 import { AIService } from './ai.service';
 import { Pinecone } from '@pinecone-database/pinecone';
-import { Folder } from 'src/entities';
+import { ChatSession, Folder } from 'src/entities';
 import { Storage } from '@google-cloud/storage';
 import { SubscriptionUsage } from 'src/entities/subscription-usage.entity';
+import { ExtractedContent } from 'src/entities/extracted-content.entity';
 
 @Injectable()
 export class FileService {
@@ -26,6 +27,10 @@ export class FileService {
     @InjectRepository(SubscriptionUsage)
     private subscriptionUsageRepository: Repository<SubscriptionUsage>,
     private aiService: AIService, // Assuming you have an AI service for text extraction and summarization
+    @InjectRepository(ExtractedContent)
+    private extractedContentRepository: Repository<ExtractedContent>,
+    @InjectRepository(ChatSession)
+    private chatSessionRepository: Repository<ChatSession>,
   ) {
     // Ensure upload directory exists
     if (!fs.existsSync(this.uploadPath)) {
@@ -223,9 +228,16 @@ export class FileService {
     // Generate summary
     const summary = await this.aiService.generateSummary(textByPages);
 
+    // Generate specific questions for user generic queries
+    const descriptionAndQuestions = await this.aiService.generateQuestionsFromFile(
+      textByPages,
+    );
+
     // Update the paper with extracted text and mark as extracted
     let updatedPaper = await this.fileRepository.save({
       ...paper,
+      description: descriptionAndQuestions.description ? descriptionAndQuestions.description : '',
+      questions: descriptionAndQuestions.questions && descriptionAndQuestions.questions.length > 0 ? descriptionAndQuestions.questions : [],
       textByPages,
       //summary,
       chunks,
@@ -443,5 +455,31 @@ export class FileService {
 
   async save(file: File): Promise<void> {
     await this.fileRepository.save(file);
+  }
+
+  async saveExtractedContent(
+    session: ChatSession,   
+    sessionId: string,
+    userId: string,
+    extractedContent: Array<{
+      fileId: string;
+      name: string;
+      content: string;
+    }>
+  ): Promise<ExtractedContent[]> {
+    const savedExtractedContentArray: ExtractedContent[] = [];
+    for (const content of extractedContent) {
+      const savedExtractedContent = await this.extractedContentRepository.save({
+        sessionId,
+        session,
+        fileId: content.fileId,
+        fileName: content.name,
+        userId,
+        text: content.content,
+      })
+      savedExtractedContentArray.push(savedExtractedContent);
+    }
+
+    return savedExtractedContentArray
   }
 }

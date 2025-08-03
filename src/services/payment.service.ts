@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Subscription as dbSubscription } from "src/entities/subscription.entity";
 import { Transaction, TransactionStatus } from "src/entities/transaction.entity";
-import { LessThan, MoreThan, Repository } from "typeorm";
+import { LessThan, MoreThan, Repository, EntityManager } from "typeorm";
 import axios from "axios";
 import { User } from "src/entities";
 import { SubscriptionUsage } from "src/entities/subscription-usage.entity";
@@ -282,19 +282,66 @@ export class PaymentService {
         });
     }
 
-    async increaseMessageUsage(subscriptionUsageId: string | undefined): Promise<void> {
-        if (!subscriptionUsageId) return;
-
-        const subscriptionUsage = await this.subscriptionUsageRepository.findOne({
-            where: { id: subscriptionUsageId }
+    async increaseMessageUsage(subscriptionUsageId: string | undefined, entityManager?: EntityManager): Promise<void> {
+        console.log('🔧 PaymentService: increaseMessageUsage called with:', {
+            subscriptionUsageId,
+            hasEntityManager: !!entityManager
         });
+        
+        if (!subscriptionUsageId) {
+            console.log('🔧 PaymentService: No subscriptionUsageId provided, returning early');
+            return;
+        }
+
+        let subscriptionUsage: SubscriptionUsage | null;
+        
+        try {
+            if (entityManager) {
+                console.log('🔧 PaymentService: Using entityManager to find subscription usage');
+                subscriptionUsage = await entityManager.findOne(SubscriptionUsage, {
+                    where: { id: subscriptionUsageId }
+                });
+            } else {
+                console.log('🔧 PaymentService: Using repository to find subscription usage');
+                subscriptionUsage = await this.subscriptionUsageRepository.findOne({
+                    where: { id: subscriptionUsageId }
+                });
+            }
+            
+            console.log('🔧 PaymentService: Found subscription usage:', {
+                found: !!subscriptionUsage,
+                currentMessagesUsed: subscriptionUsage?.messagesUsed,
+                subscriptionUsageId: subscriptionUsage?.id
+            });
+        } catch (error) {
+            console.error('❌ PaymentService: Error finding subscription usage:', error);
+            throw error;
+        }
 
         if (!subscriptionUsage) {
+            console.error('❌ PaymentService: Subscription usage not found for ID:', subscriptionUsageId);
             throw new NotFoundException('Subscription usage not found');
         }
 
+        const oldMessagesUsed = subscriptionUsage.messagesUsed;
         subscriptionUsage.messagesUsed += 1;
-        await this.subscriptionUsageRepository.save(subscriptionUsage);
+        
+        console.log('🔧 PaymentService: Updating messagesUsed from', oldMessagesUsed, 'to', subscriptionUsage.messagesUsed);
+        
+        try {
+            if (entityManager) {
+                console.log('🔧 PaymentService: Saving with entityManager');
+                await entityManager.save(subscriptionUsage);
+                console.log('✅ PaymentService: Successfully saved with entityManager');
+            } else {
+                console.log('🔧 PaymentService: Saving with repository');
+                await this.subscriptionUsageRepository.save(subscriptionUsage);
+                console.log('✅ PaymentService: Successfully saved with repository');
+            }
+        } catch (error) {
+            console.error('❌ PaymentService: Error saving subscription usage:', error);
+            throw error;
+        }
     }
 
     async generateAuthTokenCustomer(customerId: string): Promise<AuthToken> {
