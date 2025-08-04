@@ -8,6 +8,7 @@ import { AIService } from './ai.service';
 import { FileService } from './file.service';
 import { FolderService } from './folder.service';
 import { PaymentService } from './payment.service';
+import { RawExtractedContent } from 'src/entities/raw-extracted-contents';
 
 @Injectable()
 export class ChatService {
@@ -18,6 +19,8 @@ export class ChatService {
     private chatSessionRepository: Repository<ChatSession>,
     @InjectRepository(ChatMessage)
     private chatMessageRepository: Repository<ChatMessage>,
+    @InjectRepository(RawExtractedContent)
+    private rawExtractedContentsRepository: Repository<RawExtractedContent>,
     private readonly aiService: AIService,
     private readonly fileService: FileService,
     private readonly folderService: FolderService,
@@ -246,6 +249,8 @@ export class ChatService {
       content: string;
       userId: string;
     }> = [];
+
+    let rawExtractedContents: RawExtractedContent[] = [];
     
     // Optimization 1: Parallel processing and batching
     const category = await this.aiService.userQueryCategorizer(content);
@@ -254,6 +259,14 @@ export class ChatService {
     if (content) {
       if (category === 'SPECIFIC') {
         const searchResult = await this.aiService.semanticSearch(content, userId, fileContents.map(fc => fc.id))
+        rawExtractedContents = await this.rawExtractedContentsRepository.save(searchResult.hits.map(hit => ({
+          text: (hit.fields as any).chunk_text,
+          fileId: (hit.fields as any).file_id,
+          fileName: (hit.fields as any).file_name,
+          userId: userId,
+          sessionId: sessionId,
+        })))
+
         const filteredSearchResult = await this.aiService.filterSearchResults(searchResult.hits, searchResult.question, content)
               
         extractedContent = [...extractedContent, {
@@ -317,7 +330,7 @@ export class ChatService {
         session,
         sessionId,
         userId,
-        extractedContent
+        extractedContent,
       );
 
       // Remove messages from session to avoid circular reference issues
@@ -334,10 +347,6 @@ export class ChatService {
       
       // Properly set up the relationship with extractedContents
       if (savedExtractedContent && savedExtractedContent.length > 0) {
-        // Set the chatMessage reference on each ExtractedContent
-        savedExtractedContent.forEach(content => {
-          content.chatMessage = userMessage;
-        });
         userMessage.extractedContents = savedExtractedContent;
       }
 
@@ -589,6 +598,8 @@ export class ChatService {
           citations: finalCitations || [],
           session_id: sessionId,
           session: session,
+          extractedContents: savedExtractedContent,
+          rawExtractedContents: rawExtractedContents
         });
         // Note: extractedContents are already linked to the user message, not the AI response
 
@@ -756,7 +767,7 @@ export class ChatService {
     // Use AI service to search for the reference
     try {
       const oldChatMessage = await this.chatMessageRepository.findOne({
-        where: { id: chatMessageId },
+        where: { id: chatMessageId }, relations: ['rawExtractedContents']
       });
 
       if (!oldChatMessage) {
@@ -765,7 +776,7 @@ export class ChatService {
 
       // Fetch the file of the reference
 
-      const response = await this.aiService.loadReferenceAgain(textToSearch, oldChatMessage.extractedContents || []);
+      const response = await this.aiService.loadReferenceAgain(textToSearch, oldChatMessage.rawExtractedContents || []);
       console.log('AI search response: ' + response);
       // Escape newlines in textToSearch for literal replacement
       const escapedTextToSearch = textToSearch.replace(/\n/g, '\\n');

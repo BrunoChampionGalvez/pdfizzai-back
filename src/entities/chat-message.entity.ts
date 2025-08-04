@@ -1,7 +1,8 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn, ManyToMany, OneToMany } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn, ManyToMany, OneToMany, JoinTable, OneToOne } from 'typeorm';
 import { File } from './file.entity';
 import { interval } from 'rxjs';
 import { ExtractedContent } from './extracted-content.entity';
+import { RawExtractedContent } from './raw-extracted-contents';
 
 export enum MessageRole {
   USER = 'user',
@@ -52,8 +53,16 @@ export class ChatMessage {
   @Column({ type: 'jsonb', nullable: true })
   conversationSummary: string; // Summary of the conversation if applicable
 
-  @OneToMany(() => ExtractedContent, (extractedContent) => extractedContent.chatMessage, { nullable: true, cascade: true })
+  @ManyToMany(() => ExtractedContent, (extractedContent) => extractedContent.chatMessages, { nullable: true, cascade: true })
+  @JoinTable({
+    name: 'chat_messages_extracted_contents',
+    joinColumn: { name: 'chatMessageId', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'extractedContentId', referencedColumnName: 'id' },
+  })
   extractedContents: ExtractedContent[];
+
+  @OneToMany(() => RawExtractedContent, (rawExtractedContent) => rawExtractedContent.chatMessage)
+  rawExtractedContents: RawExtractedContent[];
 
   @Column({ type: 'jsonb', nullable: true })
   citations: FileCitation[];

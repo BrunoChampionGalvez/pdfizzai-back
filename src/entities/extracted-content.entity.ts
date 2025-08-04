@@ -1,4 +1,4 @@
-import { Column, Entity, ManyToOne, PrimaryGeneratedColumn } from "typeorm";
+import { Column, Entity, ManyToMany, ManyToOne, PrimaryGeneratedColumn } from "typeorm";
 import { ChatMessage } from "./chat-message.entity";
 import { ChatSession } from "./chat-session.entity";
 
@@ -7,8 +7,8 @@ export class ExtractedContent {
     @PrimaryGeneratedColumn()
     id: string;
 
-    @ManyToOne(() => ChatMessage, (chatMessage) => chatMessage.extractedContents)
-    chatMessage: ChatMessage;
+    @ManyToMany(() => ChatMessage, (chatMessage) => chatMessage.extractedContents)
+    chatMessages: ChatMessage[];
 
     @Column({ type: 'text', nullable: true })
     text: string;

@@ -465,7 +465,7 @@ export class FileService {
       fileId: string;
       name: string;
       content: string;
-    }>
+    }>,
   ): Promise<ExtractedContent[]> {
     const savedExtractedContentArray: ExtractedContent[] = [];
     for (const content of extractedContent) {

@@ -10,6 +10,7 @@ import { zodTextFormat } from 'openai/helpers/zod';
 import { z } from 'zod'
 import { Type } from "@google/genai";
 import { response } from "express";
+import { RawExtractedContent } from "src/entities/raw-extracted-contents";
 
 interface OpenAIMessage {
   role: 'user' | 'assistant' | 'system';
@@ -333,6 +334,8 @@ export class AIService {
       NOTE 4: It is EXTREMELY IMPORTANT that when providing references, you DON'T modify the text of the references. You must only provide the references' text as they are in the file content.
 
       NOTE 5: When providing each reference, ALWAYS open and close the reference tags ([REF] and [/REF]).
+
+      NOTE 6: When suitable, provide titles, subtitles, bullet point lists, numbered lists, and other markdown formatting elements to improve the readability of the response.
     `;
 
     return prompt;
@@ -493,11 +496,11 @@ export class AIService {
       const prompt = `${fileContent}`;
 
       const result = await this.gemini.models.generateContent({
-        model: this.geminiModels.flashLite,
+        model: this.geminiModels.flash,
         contents: prompt,
         config: {
           systemInstruction:
-            `You are a summary generator. You will receive the extracted text from a file. Generate a concise summary of that text. Return ONLY the summary text, nothing else. The summary should be around 10% to 25% long of the original text. The percentage should be a reasonable percentage, so that the summary conveys the main points effectively and completely. The summary will then be passed to another AI model, alongside with a general user query, to generate specific questions based on it, that will then be used to make requests to a vector store. So if you can tailor the summary for that purpose, it would be great.
+            `You are an extensive summary generator. You will receive the extracted text from a file. Generate an extensive summary of that text. Return ONLY the summary text, nothing else. The summary should be around 20% long of the file text. If the text contains 10000 words, the summary should have around 2000 words; if the text contains 20000 words, the summary should have around 4000 words. The summary should contain general information about the file, but also some specific information that would allow the user to understand the file's content further. The summary should be in the same language as the original text.
             
             Note: Ignore the [START_PAGE] and [END_PAGE] markers, they are not part of the text that you should summarize. They are just used to indicate the start and end of a page in the original file.`,
           temperature: 0.2,
@@ -542,30 +545,25 @@ export class AIService {
     }
   }
 
-  async loadReferenceAgain(textToSearch: string, context: ExtractedContent[]): Promise<string> {
+  async loadReferenceAgain(textToSearch: string, context: RawExtractedContent[]): Promise<string> {
     try {
       const response = await this.gemini.models.generateContent({
-        model: this.geminiModels.pro,
-        contents: `Specific text to search for: "${textToSearch}"
+        model: this.geminiModels.flash,
+        contents: `Text snippet to search for: "${textToSearch}"
 
-        Files context: ${JSON.stringify(context)}`,
+        Files context: \n${context.map((c) => c.text).join('\n')}`,
         config: {
           systemInstruction: `You have to do the following tasks in this exact order: 
 
-1. Search for a specific text inside the Files context, that is a set of text snippets from one or more files that are distributed in an unorderly way. The text you are searching for might not be an exact match to what is in the Files context. It could have minor variations in wording, characters, punctuation, or spacing.
+1. Search for a text snippet inside the Files context, that is a set of text chunks from one or more files that are distributed in an unorderly way. The text you are searching for might not be an exact match to what is in the Files context. It could have minor variations in wording, characters, punctuation, or spacing.
 
-2. If you find the specific text, but it is split into two parts by other content (such as information that could have been extracted from a table, graph, or other unrelated text, or the [START_PAGE] and [END_PAGE] markers), you must identify both parts. After identifying both parts, you must return ONLY the longer of the two parts. Do not include the content that was in the middle.
+2. If you find the text snippet, but it is split into two parts by other content (such as information that could have been extracted from a table, graph, or other unrelated text, or the [START_PAGE] and [END_PAGE] markers), you must identify both parts. After identifying both parts, you must return ONLY the longer of the two parts. Do not include the content that was in the middle.
 
-3. If you find the specific text and it is not split, but contains minor variations (e.g., different punctuation, a few different words or characters), return it exactly as it appears in the Files context.
+3. If you find the text snippet and it is not split, but contains minor variations (e.g., different punctuation, a few different words or characters), return it exactly as it appears in the Files context.
 
-4. If you do not find the specific text in the Files context (neither whole, with minor variations, nor split), then you must return the specific text exactly as you received it.
-
-5. If you find the specific text and it has an additional word or character next to it (either at the beginning or at the end), with no spaces between the specific text and the additional word or character, you must never split the two. Return the specific text and the additional word or character together, as it appears in the Files context. For example, if the specific text is "There were no significant differences between the two groups.", and the Files context has "methodsThis was a randomized controlled trial in which 137 participants were enrolled.", you must return "methodsThis was a randomized controlled trial in which 137 participants were enrolled.". Never return the specific text without the additional word or character, if it corresponds, even if the two don't make much sense together. If the additional word or character is part of a larger text or phrase, you must only return the specific text next to the additional word or character, and ignore the other part, even if it doesn't make sense. For example, if the specific text is "We conducted a randomized controlled trial in which 137 participants were enrolled.", and the Files context has "Materials and methodsThis was a randomized controlled trial in which 137 participants were enrolled.", you must return "methodsThis was a randomized controlled trial in which 137 participants were enrolled.". You must always return the specific text and the additional word or character together, when it corresponds, and nothing more.`,
+4. If you do not find the text snippet in the Files context (neither whole, with minor variations, nor split), then you must return the text snippet exactly as you received it.
+`,
           temperature: 0.2,
-          maxOutputTokens: 8000,
-          thinkingConfig: {
-            thinkingBudget: 3000,
-          },
         },
       });
 
@@ -761,10 +759,15 @@ export class AIService {
       
         INPUT: Query + array of {id, name, text} objects
         OUTPUT: JSON with fileId, name, and the extracted text snippet
+        
+        EXAMPLE OUTPUT:
+        {"fileId": "123", "name": "Example File", "text": "This is the extracted text snippet."}
       
         NOTE 1: If the text is split by information that was extracted from tables or graphs, provide only the longest coherent part of the two.
       
-        NOTE 2: It is EXTREMELY IMPORTANT that you don't make any modifications in the text snippet you are returning, compare it to the original text and make sure it is exactly the same.`,
+        NOTE 2: It is EXTREMELY IMPORTANT that you don't make any modifications in the text snippet you are returning, compare it to the original text and make sure it is exactly the same.
+        
+        NOTE 3: The extracted text snippet should be in the same language as the text chunks.`,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
@@ -1140,8 +1143,7 @@ export class AIService {
           - To determine if new questions are needed, make sure that the existing questions cover everything that the user query asks for. For this, consider that the questions should be as complete as possible, so that the user query can be answered fully.
           
           TASK 3: Generate new questions if needed
-          - If needsNewQuestions is true, generate 1-5 specific questions based on the file summary and the user query that would help answer it
-          - If the user query is very specific, and you think that just by responding it, the user will receive a complete response, return the user query as the only question.
+          - If needsNewQuestions is true, generate 1-8 specific questions based on the file summary and the user query that would help answer it
           - If needsNewQuestions is false, set newQuestions to an empty array
           - Make questions concise, specific, and directly relevant to the user query
           
@@ -1150,7 +1152,9 @@ export class AIService {
           - needsNewQuestions: boolean indicating if new questions should be generated
           - newQuestions: array of new questions (empty array if needsNewQuestions is false)
           
-          NOTE: If the user asks for further information check for the previous user query and model response. For this case, you can generate questions that further investigate the topic the user previously asked about. Examples of this kind of user query: "Provide more information about this", "Tell me more about that", "What else does it say?", "Can you provide more details?", "What else does the file say?", "Provide more information about the file". Also, if the user query is too generic and doesn't allow you to determine what the user asked for previously, you can review the previous model response and infer what the user asked previously.
+          NOTE 1: If the user sends a query that asks for more information, generate new specific questions different from the existing ones that you receive, that further investigate the topic the user previously asked about, and further explore things that weren't responded in the previous model response. Deduce from the user query, the file summary, the file description, and the current questions, what new questions you can generate. Examples of this kind of user query: "Provide more information about this", "Tell me more about that", "What else does it say?", "Can you provide more details?", "What else does the file say?", "Provide more information about the file".
+
+          NOTE 2: The questions should be in the same language as the file summary.
           `,
           temperature: 0.2,
           responseMimeType: 'application/json',
