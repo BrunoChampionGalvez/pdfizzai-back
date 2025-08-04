@@ -76,15 +76,6 @@ export class ChatController {
 
         // Stream each chunk as it's generated
         for await (const chunk of generator) {
-          // Log occasionally to monitor progress
-          if (Math.random() < 0.05) {
-            // Log ~5% of chunks to avoid excessive logging
-            console.log(
-              `Streaming chunk for session ${sessionId}:`, // Updated variable name
-              chunk.substring(0, 20) + (chunk.length > 20 ? '...' : ''),
-            );
-          }
-
           // Proper SSE format for Server-Sent Events - send chunk as JSON string
           res.write(`data: ${JSON.stringify(chunk)}\n\n`);
         }

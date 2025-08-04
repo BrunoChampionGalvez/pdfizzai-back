@@ -79,7 +79,12 @@ export class ChatService {
   async findSessionById(id: string, userId: string): Promise<ChatSession> {
     const session = await this.chatSessionRepository.findOne({
       where: { id, user_id: userId },
-      relations: ['messages', 'messages.extractedContents']
+      relations: ['messages', 'messages.extractedContents'],
+      order: {
+        messages: {
+          created_at: 'ASC'
+        }
+      }
     });
 
     if (!session) {
@@ -136,6 +141,8 @@ export class ChatService {
       // Validate session exists and belongs to user
       session = await this.findSessionById(sessionId, userId);
 
+      messages = session.messages
+
       if (!session) {
         throw new Error(
           'Session with ID ' + sessionId + ' not found or does not belong to user ' + userId,
@@ -158,6 +165,8 @@ export class ChatService {
         previousSessionsIds,
         contextFileIds: [...new Set([...session.contextFileIds, ...fileIds])],
       };
+
+      fileIds = [...new Set([...fileIds, ...session.contextFileIds])];
     } catch (error: unknown) {
       console.error('Error processing message:', error);
       let errorMessage =
@@ -244,56 +253,15 @@ export class ChatService {
     
     if (content) {
       if (category === 'SPECIFIC') {
-        // Parallel processing for SPECIFIC queries
-        if (fileContents && fileContents.length > 0) {
-          // Batch semantic searches in parallel
-          const searchPromises = fileContents.map(fileContent => 
-            this.aiService.semanticSearch(content, userId, fileContent.id)
-          );
-          const allSearchResults = await Promise.all(searchPromises);
-          
-          // Check if any search returned empty results
-          if (allSearchResults.some(results => !results || results.hits.length === 0)) {
-            throw new BadRequestException(
-              'No relevant content found for the provided query',
-            );
-          }
-          
-          // Batch filter operations in parallel
-          const filterPromises = allSearchResults.map((searchResults, index) => 
-            this.aiService.filterSearchResults(searchResults.hits, searchResults.question, content)
-              .then(({ fileId, name, text }) => ({
-                fileId: fileContents[index].id,
-                name: fileContents[index].name,
-                content: text,
-                userId: userId,
-              }))
-          );
-          
-          const filteredResults = await Promise.all(filterPromises);
-          extractedContent = [...extractedContent, ...filteredResults];
-        } else {
-          const searchResults = await this.aiService.semanticSearch(content, userId);
-          if (!searchResults || searchResults.hits.length === 0) {
-            throw new BadRequestException(
-              'No relevant content found for the provided query',
-            );
-          }
-          const { fileId, name, text } = await this.aiService.filterSearchResults(
-            searchResults.hits,
-            searchResults.question,
-            content,
-          );
-          extractedContent = [
-            ...extractedContent,
-            {
-              fileId: fileId,
-              name: name,
-              content: text,
-              userId: userId,
-            },
-          ];
-        }
+        const searchResult = await this.aiService.semanticSearch(content, userId, fileContents.map(fc => fc.id))
+        const filteredSearchResult = await this.aiService.filterSearchResults(searchResult.hits, searchResult.question, content)
+              
+        extractedContent = [...extractedContent, {
+          fileId: filteredSearchResult.fileId,
+          name: filteredSearchResult.name,
+          content: filteredSearchResult.text,
+          userId: userId,
+        }];
       } else {
         // Optimization 2: Parallel processing for GENERIC queries using batch processing
         // First, get all files in parallel
@@ -313,7 +281,7 @@ export class ChatService {
                 description: file.description || '',
                 // COST OPTIMIZATION: Only pass file text for small files or when questions are insufficient
                 // This reduces API costs significantly for large files
-                fileTextByPages: file.textByPages
+                summary: file.summary
               };
             }
             return null;
@@ -324,18 +292,21 @@ export class ChatService {
         const validFileData = fileData.filter(data => data !== null);
         
         if (validFileData.length > 0) {
-           // Optimization: Use smart processing strategy for optimal performance
-           const allFileResults = await this.aiService.smartProcessingStrategy(
-             validFileData,
-             content,
-             userId
-           );
-           
-           // Add to extracted content
-           extractedContent = [...extractedContent, ...allFileResults];
-         }
+            // Optimization: Use smart processing strategy for optimal performance
+            const allFileResults = await this.aiService.smartProcessingStrategy(
+              validFileData,
+              content,
+              userId,
+              messages[messages.length - 1] ? messages[messages.length - 1].content : '',
+              messages[messages.length - 2] ? messages[messages.length - 2].content : ''
+            );
+            
+            // Add to extracted content
+            extractedContent = [...extractedContent, ...allFileResults];
+          }
       }
     }
+    
 
       console.log(
         '🎯 Chat Service: Starting sendMessage for session',
@@ -597,8 +568,8 @@ export class ChatService {
       
       // Check if we need to generate a conversation summary
       // We generate summaries every 5 messages, but we need to be smart about when
-      const totalMessagesAfterThisResponse = messages.length - 1
-      const shouldGenerateSummary = totalMessagesAfterThisResponse >= 5 && totalMessagesAfterThisResponse % 5 === 0;
+      const totalMessages = messages.length - 1
+      const shouldGenerateSummary = totalMessages >= 4 && (totalMessages % 5 === 0 || (totalMessages + 1) % 5 === 0);
       
       if (shouldGenerateSummary) {
         // Get the last 5 messages for summary

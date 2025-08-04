@@ -247,7 +247,7 @@ export class AIService {
         return {
           role: msg.role === MessageRole.USER ? MessageRole.USER : MessageRole.MODEL,
           parts: [{
-            text: `Context: ${messageExtractedContentStr}\n\nUser query: ${msg.content}`,
+            text: `${msg.role === MessageRole.USER ? `Context: ${messageExtractedContentStr}` : ``}\n\n${msg.role === MessageRole.USER ? `User query: ${msg.content}` : `Model response: ${msg.content}`}`,
           }],
         };
       });
@@ -341,41 +341,65 @@ export class AIService {
   async userQueryCategorizer(query: string): Promise<string> {
     try {
       // Optimization: Use OpenAI with structured output for better performance and consistency
-      const categoryFormat = z.object({
+      /*const categoryFormat = z.object({
         category: z.enum(['SPECIFIC', 'GENERIC']),
         confidence: z.union([z.number(), z.null()])
+      });*/
+
+      const response = await this.gemini.models.generateContent({
+        model: this.geminiModels.flashLite,
+        contents: query,
+        config: {
+          systemInstruction: `Categorize a query as needing a SPECIFIC or BROAD response. Depending on that, the query will be further processed or sent directly to request a semantic search on a vector store.
+          
+          SPECIFIC: The query needs a concise and specific response.
+
+          Examples of query that needs a specific response:
+          - What was the percentage of patients that had high blood pressure?
+          - How many participants were included in the study?
+          - How many categories were the participants divided in?
+          - What is the first law of thermodynamics?
+          - What are the byproducts of oxidative phosphorilation?
+          - In what period did the t rex live?
+          - Who discovered the electron and in what year?
+          - What is the charge of the proton?
+          - What is the name of study?
+          
+          GENERIC: The query needs a relatively long and broad response, because it requires multiple things to be mentioned or explained.
+
+          Examples of query that needs a broad response:
+          - Explain the theory of general relativity
+          - What was the methodology used in this study?
+          - Provide a summary of the biography of Isaac Newton
+          - How was the periodic table developed?
+          - How were the conditions of the earth when there was no life on it yet?
+          - Explain the process of oxidative phosphorilation
+          
+          OUTPUT: JSON with category (SPECIFIC/BROAD)`,
+          temperature: 0.1,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              category: {
+                type: Type.STRING
+              }
+            }
+          }
+        },
       });
 
-      const response = await this.openaiClient.responses.parse({
-        model: 'gpt-4.1-nano',
-        input: query,
-        instructions: `Categorize user query as SPECIFIC or GENERIC.
-        
-        SPECIFIC: Asks for particular facts, details, or targeted information about specific topics
-        Examples: "How does X work?", "What is Y?", "Mechanisms of Z", "Role of A in B"
-        
-        GENERIC: Requests summaries, overviews, or general document information
-        Examples: "Main points?", "Summarize file", "What's this about?", "Hypothesis?"
-        
-        OUTPUT: JSON with category (SPECIFIC/GENERIC)`,
-        stream: false,
-        temperature: 0.1,
-        text: {
-          format: zodTextFormat(categoryFormat, "category")
-        }
-      });
-
-      return response.output_parsed?.category || 'GENERIC';
+      return JSON.parse(response.text)?.category || 'BROAD';
     } catch (error) {
       console.error('Error categorizing user query:', error);
-      return 'GENERIC';
+      return 'BROAD';
     }
   }
 
   async semanticSearch(
     query: string,
     userId: string,
-    fileId?: string,
+    fileIds?: string[],
   ): Promise<{
     hits: SearchRecordsResponseResult['hits'],
     question: string,
@@ -407,7 +431,7 @@ export class AIService {
         inputs: { text: query },
         filter: {
           userId: userId,
-          ...(fileId && { fileId: fileId }),
+          ...(fileIds && fileIds.length > 0 ? { fileId: { $in: fileIds } } : {}),
         }
       },
       fields: ['chunk_text', 'fileId', 'name', 'userId'],
@@ -473,7 +497,7 @@ export class AIService {
         contents: prompt,
         config: {
           systemInstruction:
-            `You are a summary generator. You will receive the extracted text from a file.Generate a concise summary of that text. Return ONLY the summary text, nothing else. The summary should be around 10% to 25% long of the original text, but if the original text is too short, don't make the summary shorter than 1000 words. The percentage should be a reasonable percentage, so that the summary conveys the main points effectively. The summary will then be passed to another AI model, alongside with a general user query, to generate specific questions based on it, that will then be used to make requests to a vector store. So if you can tailor the summary for that purpose, it would be great.
+            `You are a summary generator. You will receive the extracted text from a file. Generate a concise summary of that text. Return ONLY the summary text, nothing else. The summary should be around 10% to 25% long of the original text. The percentage should be a reasonable percentage, so that the summary conveys the main points effectively and completely. The summary will then be passed to another AI model, alongside with a general user query, to generate specific questions based on it, that will then be used to make requests to a vector store. So if you can tailor the summary for that purpose, it would be great.
             
             Note: Ignore the [START_PAGE] and [END_PAGE] markers, they are not part of the text that you should summarize. They are just used to indicate the start and end of a page in the original file.`,
           temperature: 0.2,
@@ -690,12 +714,11 @@ export class AIService {
     if (messages.length === 0) return null;
 
     const response = await this.gemini.models.generateContent({
-      model: this.geminiModels.flash,
-      contents: ``,
+      model: this.geminiModels.flashLite,
+      contents: `${messages.map(m => `${m.role}: ${m.content}`).join('\n')}`,
       config: {
-        systemInstruction: ``,
+        systemInstruction: `You are a conversation summary generator. You will receive a conversation history. Generate a concise summary of that conversation. Return ONLY the summary text, nothing else. The summary should be around 10% to 15% long of the original conversation. You must include the user's intent that the user had in the messages provided of the conversation. This summary will then be passed to an AI so that it has context of what the user has asked and of what another AI has responded.`,
         temperature: 0.2,
-        maxOutputTokens: 8000,
       },
     });
 
@@ -844,9 +867,11 @@ export class AIService {
 
   // Optimization: Smart task decomposition - intelligently choose processing strategy
   async smartProcessingStrategy(
-    files: Array<{ fileId: string; name: string; questions: string[]; description: string; fileTextByPages?: string }>,
+    files: Array<{ fileId: string; name: string; questions: string[]; description: string; summary?: string }>,
     userQuery: string,
-    userId: string
+    userId: string,
+    previousModelResponse?: string,
+    previousUserQuery?: string,
   ): Promise<Array<{
     fileId: string;
     name: string;
@@ -862,17 +887,18 @@ export class AIService {
       // Choose optimal strategy based on analysis
       if (totalFiles <= 2 && queryComplexity === 'simple') {
         // Sequential processing for small, simple tasks
-        return this.sequentialProcessFiles(files, userQuery, userId);
+        return this.sequentialProcessFiles(files, userQuery, userId, previousUserQuery, previousModelResponse);
       } else if (totalFiles <= 5 && avgQuestionsPerFile <= 10) {
         // Parallel processing for medium tasks
-        return this.batchProcessFiles(files, userQuery, userId);
+        return this.batchProcessFiles(files, userQuery, userId, previousUserQuery, previousModelResponse);
       } else {
         // Hybrid approach for complex tasks
-        return this.hybridProcessFiles(files, userQuery, userId);
+        return this.hybridProcessFiles(files, userQuery, userId, previousUserQuery, previousModelResponse);
+
       }
     } catch (error) {
       console.error('Error in smartProcessingStrategy:', error);
-      return this.batchProcessFiles(files, userQuery, userId); // Fallback
+      return this.batchProcessFiles(files, userQuery, userId, previousUserQuery); // Fallback
     }
   }
 
@@ -900,7 +926,7 @@ export class AIService {
         if (file.questions && file.questions.length > 0) {
           // Use existing questions for semantic search (handles generic queries better)
           const questionSearchPromises = file.questions.map(question => 
-            this.semanticSearch(question, userId, file.fileId)
+            this.semanticSearch(question, userId, [file.fileId])
           );
           
           const questionSearchResults = await Promise.all(questionSearchPromises);
@@ -946,9 +972,11 @@ export class AIService {
   }
 
   private async sequentialProcessFiles(
-    files: Array<{ fileId: string; name: string; questions: string[]; description: string; fileTextByPages?: string }>,
+    files: Array<{ fileId: string; name: string; questions: string[]; description: string; summary?: string }>,
     userQuery: string,
-    userId: string
+    userId: string,
+    previousUserQuery?: string,
+    previousModelResponse?: string,
   ): Promise<Array<{
     fileId: string;
     name: string;
@@ -969,7 +997,9 @@ export class AIService {
         userQuery,
         userId,
         file.fileId,
-        file.fileTextByPages
+        file.summary,
+        previousUserQuery,
+        previousModelResponse,
       );
       results.push(...fileResults);
     }
@@ -980,7 +1010,9 @@ export class AIService {
   private async hybridProcessFiles(
     files: Array<{ fileId: string; name: string; questions: string[]; description: string; fileTextByPages?: string }>,
     userQuery: string,
-    userId: string
+    userId: string,
+    previousUserQuery?: string,
+    previousModelResponse?: string,
   ): Promise<Array<{
     fileId: string;
     name: string;
@@ -998,8 +1030,8 @@ export class AIService {
     const highPriority = prioritizedFiles.slice(0, Math.ceil(files.length / 2));
     const lowPriority = prioritizedFiles.slice(Math.ceil(files.length / 2));
 
-    const highPriorityResults = await this.batchProcessFiles(highPriority, userQuery, userId);
-    const lowPriorityResults = await this.batchProcessFiles(lowPriority, userQuery, userId);
+    const highPriorityResults = await this.batchProcessFiles(highPriority, userQuery, userId, previousUserQuery, previousModelResponse);
+    const lowPriorityResults = await this.batchProcessFiles(lowPriority, userQuery, userId, previousUserQuery, previousModelResponse);
 
     return [...highPriorityResults, ...lowPriorityResults];
   }
@@ -1013,9 +1045,11 @@ export class AIService {
 
   // Optimization: Batch processing for multiple files
   async batchProcessFiles(
-    files: Array<{ fileId: string; name: string; questions: string[]; description: string; fileTextByPages?: string }>,
+    files: Array<{ fileId: string; name: string; questions: string[]; description: string; summary?: string }>,
     userQuery: string,
-    userId: string
+    userId: string,
+    previousUserQuery?: string,
+    previousModelResponse?: string,
   ): Promise<Array<{
     fileId: string;
     name: string;
@@ -1041,7 +1075,9 @@ export class AIService {
             userQuery,
             userId,
             file.fileId,
-            file.fileTextByPages
+            file.summary,
+            previousUserQuery,
+            previousModelResponse,
           )
         );
         
@@ -1063,7 +1099,9 @@ export class AIService {
     userQuery: string,
     userId: string,
     fileId: string,
-    fileTextByPages?: string
+    summary?: string,
+    previousUserQuery?: string,
+    previousModelResponse?: string,
   ): Promise<Array<{
     fileId: string;
     name: string;
@@ -1074,50 +1112,72 @@ export class AIService {
       // Use full file content for question analysis to ensure high-quality questions
       let relevantContent = '';
       
-      if (fileTextByPages) {
+      if (summary) {
         // Full content is essential for generating comprehensive, relevant questions
-        relevantContent = fileTextByPages;
+        relevantContent = summary;
       }
 
       // Prompt chaining - combine question analysis and generation
-      const combinedResponseFormat = z.object({
+      /*const combinedResponseFormat = z.object({
         relevantQuestions: z.array(z.string()),
         needsNewQuestions: z.boolean(),
         newQuestions: z.array(z.string()),
-        reasoning: z.string()
+      });*/
+
+      const response = await this.gemini.models.generateContent({
+        model: this.geminiModels.flash,
+        contents: `User query: ${userQuery}\n\nFile description: ${description}\n\nExisting questions: ${questions.join('\n')}${relevantContent ? `\n\nFile summary: ${relevantContent}` : ''}\n\nPrevious user query: ${previousUserQuery || 'No previous user query exists'}\n\nPrevious model response: ${previousModelResponse || 'No previous model response exists'}`,
+        config:  {
+          systemInstruction: `You are an intelligent question processor. Analyze the user query against existing questions and file summary to determine the best approach.
+          
+          TASK 1: Determine which existing questions help answer the user query
+          - Review each existing question against the user query and file description
+          - Select only questions that are directly relevant to answering the user query
+          
+          TASK 2: Determine if new questions are needed
+          - If the existing relevant questions are sufficient to answer the user query, set needsNewQuestions to false
+          - If the existing questions are insufficient or irrelevant, set needsNewQuestions to true
+          - To determine if new questions are needed, make sure that the existing questions cover everything that the user query asks for. For this, consider that the questions should be as complete as possible, so that the user query can be answered fully.
+          
+          TASK 3: Generate new questions if needed
+          - If needsNewQuestions is true, generate 1-5 specific questions based on the file summary and the user query that would help answer it
+          - If the user query is very specific, and you think that just by responding it, the user will receive a complete response, return the user query as the only question.
+          - If needsNewQuestions is false, set newQuestions to an empty array
+          - Make questions concise, specific, and directly relevant to the user query
+          
+          Return your analysis in the specified JSON format with:
+          - relevantQuestions: array of existing questions that help answer the user query
+          - needsNewQuestions: boolean indicating if new questions should be generated
+          - newQuestions: array of new questions (empty array if needsNewQuestions is false)
+          
+          NOTE: If the user asks for further information check for the previous user query and model response. For this case, you can generate questions that further investigate the topic the user previously asked about. Examples of this kind of user query: "Provide more information about this", "Tell me more about that", "What else does it say?", "Can you provide more details?", "What else does the file say?", "Provide more information about the file". Also, if the user query is too generic and doesn't allow you to determine what the user asked for previously, you can review the previous model response and infer what the user asked previously.
+          `,
+          temperature: 0.2,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              relevantQuestions: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.STRING
+                }
+              },
+              needsNewQuestions: { 
+                type: Type.BOOLEAN
+              },
+              newQuestions: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.STRING
+                }
+              },
+            }
+          }
+        },
       });
 
-      const response = await this.openaiClient.responses.parse({
-        model: 'gpt-4.1-mini',
-        input: `User query: ${userQuery}\n\nFile description: ${description}\n\nExisting questions: ${questions.join('\n')}${relevantContent ? `\n\nRelevant file content: ${relevantContent}` : ''}`,
-        instructions: `You are an intelligent question processor. Analyze the user query against existing questions and file content to determine the best approach.
-
-        TASK 1: Determine which existing questions help answer the user query
-        - Review each existing question against the user query and file description
-        - Select only questions that are directly relevant to answering the user query
-        
-        TASK 2: Determine if new questions are needed
-        - If the existing relevant questions are sufficient to answer the user query, set needsNewQuestions to false
-        - If the existing questions are insufficient or irrelevant, set needsNewQuestions to true
-        
-        TASK 3: Generate new questions if needed
-        - If needsNewQuestions is true, generate 3-5 specific questions based on the file content that would help answer the user query
-        - If needsNewQuestions is false, set newQuestions to an empty array
-        - Make questions concise, specific, and directly relevant to the user query
-        
-        Return your analysis in the specified JSON format with:
-        - relevantQuestions: array of existing questions that help answer the user query
-        - needsNewQuestions: boolean indicating if new questions should be generated
-        - newQuestions: array of new questions (empty array if needsNewQuestions is false)
-        - reasoning: brief explanation of your decision`,
-        stream: false,
-        temperature: 0.2,
-        text: {
-          format: zodTextFormat(combinedResponseFormat, "event")
-        }
-      });
-
-      const analysis = response.output_parsed;
+      const analysis = JSON.parse(response.text);
       if (!analysis) {
         return [];
       }
@@ -1136,7 +1196,7 @@ export class AIService {
 
       // Optimization 3: Parallel processing of semantic searches and filtering
       const searchPromises = questionsToProcess.map(question => 
-        this.semanticSearch(question, userId, fileId)
+        this.semanticSearch(question, userId, [fileId])
       );
       
       const allSearchResults = await Promise.all(searchPromises);
