@@ -310,12 +310,15 @@ export class ChatService {
               validFileData,
               content,
               userId,
+              sessionId,
               messages[messages.length - 1] ? messages[messages.length - 1].content : '',
               messages[messages.length - 2] ? messages[messages.length - 2].content : ''
             );
             
             // Add to extracted content
-            extractedContent = [...extractedContent, ...allFileResults];
+            extractedContent = [...extractedContent, ...allFileResults.filteredResults];
+            rawExtractedContents = [...rawExtractedContents, ...allFileResults.rawExtractedContent];
+
           }
       }
     }

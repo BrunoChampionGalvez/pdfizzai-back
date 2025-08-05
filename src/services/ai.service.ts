@@ -11,6 +11,8 @@ import { z } from 'zod'
 import { Type } from "@google/genai";
 import { response } from "express";
 import { RawExtractedContent } from "src/entities/raw-extracted-contents";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
 
 interface OpenAIMessage {
   role: 'user' | 'assistant' | 'system';
@@ -33,6 +35,8 @@ export class AIService {
 
   constructor(
     private configService: ConfigService,
+    @InjectRepository(RawExtractedContent)
+    private rawExtractedContentsRepository: Repository<RawExtractedContent>,
   ) {
     this.geminiModels = {
       pro: 'gemini-2.5-pro',
@@ -588,19 +592,15 @@ export class AIService {
   ): Promise<string> {
     try {
       const response = await this.gemini.models.generateContent({
-        model: this.geminiModels.pro,
+        model: this.geminiModels.flash,
         contents: `${textToSearch}`,
         config: {
-          systemInstruction: `You will receive a text (that is a response to a user query) that contains standard text, but also references to files that were used to generate that response in a specific format (each between the [REF] and [/REF] tags). Your task is to filter the text following the rule below:
+          systemInstruction: `You will receive a text. Your task is to filter the text following the rule below:
 
-          1. The text of each reference can be split by one or more consecutive or disperse numerical references (that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc.), you must identify the parts of the text of the reference that are split by the numerical references. After identifying the parts, you must modify the text of the reference to ONLY contain the longest of the parts. Do not include all the parts. After selecting the longest part, remove the numerical reference from it, if it is still there. Take into account that the numerical references could be separated by a comma, a space, or enclosed in square brackets, so you must be careful to identify them correctly. Also take into account that the text of the reference can contain numers that ARE NOT numerical references, so you must be careful to only remove the numerical references that are part of the text of the reference, and not those that are not. To understand which are the numerical references and which are not, you must take into account the context of the text of the reference, and the fact that numerical references are usually used to refer to a specific piece of information, while numbers that are not numerical references are usually part of the text itself (for example, in a sentence like "The study was conducted in 2023", the number 2023 is not a numerical reference, but part of the text; or in a sentence like "There were 97 participants in the study", the number 97 is not a numerical reference, but part of the text.). You DO NOT have to remove the numerical references, you must only remove the shorter parts of the text of the reference that are split by the numerical references, and replace the text of the reference with the longest part.
+          - The text can be split by one or more consecutive or disperse numerical references (that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc.), you must identify the parts of the text that are split by the numerical references. After identifying the parts, you must modify the text to ONLY contain the longest of the parts. Do not include all the parts. After selecting the longest part, remove the numerical references from it, if it still has them. Take into account that the numerical references could be separated by a comma, a space, or enclosed in square brackets, so you must be careful to identify them correctly. Also take into account that the text can contain numbers that ARE NOT numerical references, so you must be careful to only remove the numbers that are numerical references, and not those that are not. To understand which are the numerical references and which are not, you must take into account the context of the text of the reference, and the fact that numerical references are usually used to refer to a specific piece of information, so they don't have semantic continuity with the text they are in. While numbers that are not numerical references are usually part of the text itself, and they fit within the meaning of the text they are in. For example, in a sentence like "The study was conducted in 2023", the number 2023 is not a numerical reference, but part of the text; or in a sentence like "There were 97 participants in the study", the number 97 is not a numerical reference, but part of the text.
           
-          After filtering the text of the references that contain numerical references, you must return the modified text, with the references that were modified, and the rest of the text unchanged. If there are no numerical references in the text, you must return the text as it is.`,
+          After filtering the text, you must return the modified text. If there are no numerical references in the text, you must return the text as you received it.`,
           temperature: 0.2,
-          maxOutputTokens: 8000,
-          thinkingConfig: {
-            thinkingBudget: 128,
-          },
         },
       });
 
@@ -763,11 +763,11 @@ export class AIService {
         EXAMPLE OUTPUT:
         {"fileId": "123", "name": "Example File", "text": "This is the extracted text snippet."}
       
-        NOTE 1: If the text is split by information that was extracted from tables or graphs, provide only the longest coherent part of the two.
-      
-        NOTE 2: It is EXTREMELY IMPORTANT that you don't make any modifications in the text snippet you are returning, compare it to the original text and make sure it is exactly the same.
+        NOTE 1: If the text is split in two parts by information that was extracted from tables or graphs, provide only the longest coherent part of the two.
         
-        NOTE 3: The extracted text snippet should be in the same language as the text chunks.`,
+        NOTE 2: The extracted text snippet should be in the same language as the text chunks.
+        
+        NOTE 3: Before returning the text snippet, see if it contains the [START_PAGE] and/or [END_PAGE] markers. If it has them, don't remove them and return the text with them included.`,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
@@ -791,18 +791,31 @@ export class AIService {
     const parsedResult = JSON.parse(result.text);
 
     const result2 = await this.gemini.models.generateContent({
-      model: this.geminiModels.flashLite,
+      model: this.geminiModels.flash,
       config: {
         systemInstruction: `Filter the text following these guidelines:
         
-        1. If the text is split across pages (contains [START_PAGE] and [END_PAGE] markers in the middle), provide only the longest part of the two. Remove the page markers but DO NOT add ellipses (...).
+        1. If the text contains [START_PAGE] and [END_PAGE] markers in the middle, or either of the markers at the start or the end, follow the following steps:
+          I. Split the text by the markers.
+          II. Return only the longest part of the two. Remove the page markers but DO NOT add ellipses (...).
+          III. If one or two of the markers are at the start or end of the text, just remove the markers and return the rest of the text.
 
-        2. If the text has numerical references like [1], [2], [3] or 1, 2, 3, provide only the longest part of the text between these references. These numerical references are detectable by seeing if the numbers present have coherence with the text in which they are in. If they are random numbers inserted that don't have coherence with the text, it is because they are numerical references. If, the numbers have meaning with respect to the rest of the text, return the whole text.
+        2. If the text has numerical references like [1], [2], [3] or 1, 2, 3, follow the following steps:
+          I. Split the text by the numerical references. These numerical references are detectable by seeing if the numbers present have semantical coherence with the rest of the text in which they are in. If they are random numbers inserted that don't have semantical coherence with the rest of the text, it is because they are numerical references. If, the numbers fit semantically within the text they are in, return the whole text.
+          II. Return only the longest part of the parts that were divided by these numerical references.
+          III. If the text doesn't have numerical references, return the whole text.
+          IV. Examples of texts with numerical references:
+            a. The mitochondria is the power house of the cell 1.
+            b. We drew the data from the records of the John Hopkins Hospital 3, 4, the participants were middle aged adult smokers 3.
+            c. Paliperidone is a second generation antipsychotic 2, usually applied by injectionss.
+            d. The mitochondria is the power house of the cell [1].
+            e. We drew the data from the records of the John Hopkins Hospital [3], [4], the participants were middle aged adult smokers [3].
+          V. Examples of texts without numerical references:
+            a. There were 237 participants in the study, 120 of which were men, and 117 women.
+            b. The participants in the experimental group received between 2 and 3 doses of the medication, same as the placebo group.
+            c. The psychological test, comprised of 87 questions, evaluates different aspects of emotional intelligence.
 
-
-        NOTE 1: It is EXTREMELY IMPORTANT that you don't make any modifications in the text snippet you are returning. After you have filtered with the above guidelines, compare the filtered text to the original text and make sure it doesn't contain any modifications.
-
-        NOTE 2: DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, and ANY character that was in the original chunk text.
+        NOTE: DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, ", ', and ANY character that was in the original chunk text.
         `,
       },
       contents: parsedResult.text || '',
@@ -873,14 +886,18 @@ export class AIService {
     files: Array<{ fileId: string; name: string; questions: string[]; description: string; summary?: string }>,
     userQuery: string,
     userId: string,
+    sessionId: string,
     previousModelResponse?: string,
     previousUserQuery?: string,
-  ): Promise<Array<{
-    fileId: string;
-    name: string;
-    content: string;
-    userId: string;
-  }>> {
+  ): Promise<{
+    filteredResults: Array<{
+      fileId: string;
+      name: string;
+      content: string;
+      userId: string;
+    }>;
+    rawExtractedContent: RawExtractedContent[];
+  }> {
     try {
       // Smart decomposition: analyze query and file characteristics
       const queryComplexity = this.analyzeQueryComplexity(userQuery);
@@ -890,26 +907,29 @@ export class AIService {
       // Choose optimal strategy based on analysis
       if (totalFiles <= 2 && queryComplexity === 'simple') {
         // Sequential processing for small, simple tasks
-        return this.sequentialProcessFiles(files, userQuery, userId, previousUserQuery, previousModelResponse);
+        return this.sequentialProcessFiles(files, userQuery, userId, sessionId, previousUserQuery, previousModelResponse);
       } else if (totalFiles <= 5 && avgQuestionsPerFile <= 10) {
         // Parallel processing for medium tasks
-        return this.batchProcessFiles(files, userQuery, userId, previousUserQuery, previousModelResponse);
+        return this.batchProcessFiles(files, userQuery, userId, sessionId, previousUserQuery, previousModelResponse);
+
       } else {
         // Hybrid approach for complex tasks
-        return this.hybridProcessFiles(files, userQuery, userId, previousUserQuery, previousModelResponse);
+        return this.hybridProcessFiles(files, userQuery, userId, sessionId, previousUserQuery, previousModelResponse);
+
 
       }
     } catch (error) {
       console.error('Error in smartProcessingStrategy:', error);
-      return this.batchProcessFiles(files, userQuery, userId, previousUserQuery); // Fallback
+      return this.batchProcessFiles(files, userQuery, userId, sessionId, previousUserQuery, previousModelResponse); // Fallback
     }
   }
 
   // COST OPTIMIZATION: Uses questions for semantic search to handle generic queries effectively
-  private async costEfficientSemanticSearch(
+  /*private async costEfficientSemanticSearch(
     files: Array<{ fileId: string; name: string; questions: string[]; description: string; fileTextByPages?: string }>,
     userQuery: string,
-    userId: string
+    userId: string,
+    sessionId: string,
   ): Promise<Array<{
     fileId: string;
     name: string;
@@ -961,9 +981,9 @@ export class AIService {
     } catch (error) {
       console.error('Error in costEfficientSemanticSearch:', error);
       // Fallback to regular batch processing
-      return this.batchProcessFiles(files, userQuery, userId);
+      return this.batchProcessFiles(files, userQuery, userId, sessionId);
     }
-  }
+  }*/
 
   private analyzeQueryComplexity(query: string): 'simple' | 'medium' | 'complex' {
     const words = query.split(' ').length;
@@ -978,20 +998,28 @@ export class AIService {
     files: Array<{ fileId: string; name: string; questions: string[]; description: string; summary?: string }>,
     userQuery: string,
     userId: string,
+    sessionId: string,
     previousUserQuery?: string,
     previousModelResponse?: string,
-  ): Promise<Array<{
-    fileId: string;
-    name: string;
-    content: string;
-    userId: string;
-  }>> {
+  ): Promise<{
+    filteredResults: Array<{
+      fileId: string;
+      name: string;
+      content: string;
+      userId: string;
+    }>;
+    rawExtractedContent: RawExtractedContent[];
+  }> {
+
     const results: Array<{
       fileId: string;
       name: string;
       content: string;
       userId: string;
     }> = [];
+
+    const rawExtractedContent: RawExtractedContent[] = [];
+
 
     for (const file of files) {
       const fileResults = await this.processQuestionsForQuery(
@@ -1000,28 +1028,37 @@ export class AIService {
         userQuery,
         userId,
         file.fileId,
+        sessionId,
         file.summary,
         previousUserQuery,
         previousModelResponse,
       );
-      results.push(...fileResults);
+      rawExtractedContent.push(...fileResults.rawExtractedContent);
+      results.push(...fileResults.filteredResults);
     }
 
-    return results;
+    return {
+      filteredResults: results,
+      rawExtractedContent: rawExtractedContent,
+    };
   }
 
   private async hybridProcessFiles(
     files: Array<{ fileId: string; name: string; questions: string[]; description: string; fileTextByPages?: string }>,
     userQuery: string,
     userId: string,
+    sessionId: string,
     previousUserQuery?: string,
     previousModelResponse?: string,
-  ): Promise<Array<{
-    fileId: string;
-    name: string;
-    content: string;
-    userId: string;
-  }>> {
+  ): Promise<{
+    filteredResults: Array<{
+      fileId: string;
+      name: string;
+      content: string;
+      userId: string;
+    }>;
+    rawExtractedContent: RawExtractedContent[];
+  }> {
     // Hybrid: prioritize files with more relevant questions, process in optimized batches
     const prioritizedFiles = files.sort((a, b) => {
       const aRelevance = this.calculateFileRelevance(a.description, userQuery);
@@ -1033,10 +1070,13 @@ export class AIService {
     const highPriority = prioritizedFiles.slice(0, Math.ceil(files.length / 2));
     const lowPriority = prioritizedFiles.slice(Math.ceil(files.length / 2));
 
-    const highPriorityResults = await this.batchProcessFiles(highPriority, userQuery, userId, previousUserQuery, previousModelResponse);
-    const lowPriorityResults = await this.batchProcessFiles(lowPriority, userQuery, userId, previousUserQuery, previousModelResponse);
+    const highPriorityResults = await this.batchProcessFiles(highPriority, userQuery, userId, sessionId, previousUserQuery, previousModelResponse);
+    const lowPriorityResults = await this.batchProcessFiles(lowPriority, userQuery, userId, sessionId, previousUserQuery, previousModelResponse);
 
-    return [...highPriorityResults, ...lowPriorityResults];
+    return {
+      filteredResults: [...highPriorityResults.filteredResults, ...lowPriorityResults.filteredResults],
+      rawExtractedContent: [...highPriorityResults.rawExtractedContent, ...lowPriorityResults.rawExtractedContent],
+    };
   }
 
   private calculateFileRelevance(description: string, query: string): number {
@@ -1051,14 +1091,19 @@ export class AIService {
     files: Array<{ fileId: string; name: string; questions: string[]; description: string; summary?: string }>,
     userQuery: string,
     userId: string,
+    sessionId: string,
     previousUserQuery?: string,
     previousModelResponse?: string,
-  ): Promise<Array<{
-    fileId: string;
-    name: string;
-    content: string;
-    userId: string;
-  }>> {
+  ): Promise<{
+    filteredResults: Array<{
+      fileId: string;
+      name: string;
+      content: string;
+      userId: string;
+    }>;
+    rawExtractedContent: RawExtractedContent[];
+  }> {
+
     try {
       // Process files in parallel with controlled concurrency
       const batchSize = 3; // Limit concurrent processing to avoid rate limits
@@ -1068,6 +1113,7 @@ export class AIService {
         content: string;
         userId: string;
       }> = [];
+      const rawExtractedContent: RawExtractedContent[] = [];
 
       for (let i = 0; i < files.length; i += batchSize) {
         const batch = files.slice(i, i + batchSize);
@@ -1078,6 +1124,7 @@ export class AIService {
             userQuery,
             userId,
             file.fileId,
+            sessionId,
             file.summary,
             previousUserQuery,
             previousModelResponse,
@@ -1085,13 +1132,21 @@ export class AIService {
         );
         
         const batchResults = await Promise.all(batchPromises);
-        results.push(...batchResults.flat());
+        results.push(...batchResults.map(br => br.filteredResults).flat());
+        rawExtractedContent.push(...batchResults.map(br => br.rawExtractedContent).flat());
+
       }
 
-      return results;
+      return {
+        filteredResults: results,
+        rawExtractedContent: rawExtractedContent ,
+      };
     } catch (error) {
       console.error('Error in batchProcessFiles:', error);
-      return [];
+      return {
+        filteredResults: [],
+        rawExtractedContent: [],
+      };
     }
   }
 
@@ -1102,15 +1157,19 @@ export class AIService {
     userQuery: string,
     userId: string,
     fileId: string,
+    sessionId: string,
     summary?: string,
     previousUserQuery?: string,
     previousModelResponse?: string,
-  ): Promise<Array<{
-    fileId: string;
-    name: string;
-    content: string;
-    userId: string;
-  }>> {
+  ): Promise<{
+    filteredResults: Array<{
+      fileId: string;
+      name: string;
+      content: string;
+      userId: string;
+    }>;
+    rawExtractedContent: RawExtractedContent[];
+  }> {
     try {
       // Use full file content for question analysis to ensure high-quality questions
       let relevantContent = '';
@@ -1183,7 +1242,10 @@ export class AIService {
 
       const analysis = JSON.parse(response.text);
       if (!analysis) {
-        return [];
+        return {
+          filteredResults: [],
+          rawExtractedContent: [],
+        };
       }
 
       // Determine which questions to use
@@ -1195,7 +1257,10 @@ export class AIService {
         questionsToProcess = analysis.newQuestions;
       } else {
         // Fallback: if no questions are relevant and we can't generate new ones
-        return [];
+        return {
+          filteredResults: [],
+          rawExtractedContent: [],
+        };
       }
 
       // Optimization 3: Parallel processing of semantic searches and filtering
@@ -1209,9 +1274,20 @@ export class AIService {
       const validSearchResults = allSearchResults.filter(results => results && results.hits.length > 0);
       
       if (validSearchResults.length === 0) {
-        return [];
+        return {
+          filteredResults: [],
+          rawExtractedContent: [],
+        };
       }
       
+      const rawExtractedContent = await this.rawExtractedContentsRepository.save(validSearchResults.map((hit, index) => ({
+          text: (hit.hits[index].fields as any).chunk_text,
+          fileId: (hit.hits[index].fields as any).file_id,
+          fileName: (hit.hits[index].fields as any).file_name,
+          userId: userId,
+          sessionId: sessionId,
+        } as RawExtractedContent)))
+
       // Batch filter operations in parallel
       const filterPromises = validSearchResults.map(searchResults => 
         this.filterSearchResults(searchResults.hits, searchResults.question, userQuery)
@@ -1220,16 +1296,22 @@ export class AIService {
       const filteredResults = await Promise.all(filterPromises);
       
       // Transform to expected format
-      return filteredResults.map(({ fileId, name, text }) => ({
-        fileId,
-        name,
-        content: text,
-        userId
-      }));
+      return {
+        filteredResults: filteredResults.map(({ fileId, name, text }) => ({
+          fileId,
+          name,
+          content: text,
+          userId
+        })),
+        rawExtractedContent: rawExtractedContent,
+    }
       
     } catch (error) {
       console.error('Error in processQuestionsForQuery:', error);
-      return [];
+      return {
+        filteredResults: [],
+        rawExtractedContent: [],
+      };
     }
   }
 }
