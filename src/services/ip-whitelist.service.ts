@@ -37,7 +37,42 @@ export class IPWhitelistService {
       return true;
     }
     
+    // Allow Vercel deployment IPs (for frontend requests)
+    const vercelIPs = [
+      '76.76.19.0/24',
+      '76.76.21.0/24', 
+      '76.223.126.88/29',
+      '179.6.0.0/16'  // Your current IP range
+    ];
+    
+    // Check if IP is in any of the Vercel IP ranges
+    for (const range of vercelIPs) {
+      if (this.isIPInRange(ip, range)) {
+        return true;
+      }
+    }
+    
     return allowedIPs.includes(ip);
+  }
+  
+  private isIPInRange(ip: string, range: string): boolean {
+    if (!range.includes('/')) {
+      return ip === range;
+    }
+    
+    const [network, prefixLength] = range.split('/');
+    const networkParts = network.split('.').map(Number);
+    const ipParts = ip.split('.').map(Number);
+    const prefix = parseInt(prefixLength);
+    
+    // Convert to 32-bit integers
+    const networkInt = (networkParts[0] << 24) + (networkParts[1] << 16) + (networkParts[2] << 8) + networkParts[3];
+    const ipInt = (ipParts[0] << 24) + (ipParts[1] << 16) + (ipParts[2] << 8) + ipParts[3];
+    
+    // Create subnet mask
+    const mask = (-1 << (32 - prefix)) >>> 0;
+    
+    return (networkInt & mask) === (ipInt & mask);
   }
 
   logAccess(ip: string, allowed: boolean, userAgent?: string): void {
