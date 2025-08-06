@@ -1,3 +1,6 @@
+// Import crypto polyfill FIRST before any other modules
+import './crypto-polyfill';
+
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
