@@ -24,11 +24,17 @@ async function bootstrap() {
   
   // CORS configuration - simplified since IP whitelisting is handled by middleware
   app.enableCors({
-    origin: [
-      process.env.FRONTEND_URL || 'http://localhost:3000',
-      // Allow requests from whitelisted IPs
-      /^https?:\/\/(34\.194\.127\.46|54\.234\.237\.108|3\.208\.120\.145|44\.226\.236\.210|44\.241\.183\.62|100\.20\.172\.113)/
-    ],
+    origin: process.env.NODE_ENV === 'production' 
+      ? [
+          process.env.FRONTEND_URL,
+          /^https:\/\/.*\.vercel\.app$/,  // Allow Vercel deployments
+          /^https:\/\/.*\.netlify\.app$/,  // Allow Netlify deployments
+        ].filter(Boolean)
+      : [
+          'http://localhost:3000',
+          'http://localhost:3001',
+          process.env.FRONTEND_URL,
+        ].filter(Boolean),
     credentials: true,
   });
 
