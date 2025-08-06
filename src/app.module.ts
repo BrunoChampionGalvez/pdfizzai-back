@@ -70,7 +70,7 @@ import { RawExtractedContent } from './entities/raw-extracted-contents';
         password: configService.get('DB_PASSWORD', 'password'),
         database: configService.get('DB_NAME', 'refery_ai'),
         entities: [User, Folder, File, ChatSession, ChatMessage, Subscription, Transaction, SubscriptionUsage, SubscriptionPlan, ExtractedContent, RawExtractedContent],
-        synchronize: configService.get('NODE_ENV') !== 'production',
+        synchronize: true,
         dropSchema: false,
       }),
       inject: [ConfigService],
