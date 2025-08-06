@@ -3,6 +3,12 @@ import { ValidationPipe, Logger } from '@nestjs/common';
 import { AppModule } from './app.module';
 import * as cookieParser from 'cookie-parser';
 import helmet from 'helmet';
+import { webcrypto } from 'crypto';
+
+// Polyfill for crypto.randomUUID in Node.js environments
+if (!globalThis.crypto) {
+  globalThis.crypto = webcrypto as any;
+}
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');

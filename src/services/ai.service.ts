@@ -1280,13 +1280,17 @@ export class AIService {
         };
       }
       
-      const rawExtractedContent = await this.rawExtractedContentsRepository.save(validSearchResults.map((hit, index) => ({
-          text: (hit.hits[index].fields as any).chunk_text,
-          fileId: (hit.hits[index].fields as any).file_id,
-          fileName: (hit.hits[index].fields as any).file_name,
-          userId: userId,
-          sessionId: sessionId,
-        } as RawExtractedContent)))
+      const rawExtractedContent = await this.rawExtractedContentsRepository.save(
+        validSearchResults.flatMap(result => 
+          result.hits.map(hit => ({
+            text: (hit.fields as any).chunk_text,
+            fileId: (hit.fields as any).fileId,
+            fileName: (hit.fields as any).name,
+            userId: userId,
+            sessionId: sessionId,
+          } as RawExtractedContent))
+        )
+      );
 
       // Batch filter operations in parallel
       const filterPromises = validSearchResults.map(searchResults => 

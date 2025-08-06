@@ -169,7 +169,11 @@ export class ChatService {
         contextFileIds: [...new Set([...session.contextFileIds, ...fileIds])],
       };
 
-      fileIds = [...new Set([...fileIds, ...session.contextFileIds])];
+      if (fileIds.length > 0) {
+        fileIds = fileIds
+      } else {
+        fileIds = session.contextFileIds;
+      }
     } catch (error: unknown) {
       console.error('Error processing message:', error);
       let errorMessage =
