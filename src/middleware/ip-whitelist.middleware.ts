@@ -1,14 +1,11 @@
 import { Injectable, NestMiddleware, ForbiddenException } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
-import { Reflector } from '@nestjs/core';
 import { IPWhitelistService } from '../services/ip-whitelist.service';
-import { SKIP_IP_WHITELIST_KEY } from '../decorators/skip-ip-whitelist.decorator';
 
 @Injectable()
 export class IPWhitelistMiddleware implements NestMiddleware {
   constructor(
     private ipWhitelistService: IPWhitelistService,
-    private reflector: Reflector,
   ) {}
 
   use(req: Request, res: Response, next: NextFunction) {
@@ -21,14 +18,9 @@ export class IPWhitelistMiddleware implements NestMiddleware {
       return next();
     }
 
-    // Check if route has skip whitelist decorator
-    const skipWhitelist = this.reflector.get<boolean>(
-      SKIP_IP_WHITELIST_KEY,
-      req.route?.stack?.[0]?.handle,
-    );
-
-    if (skipWhitelist) {
-      this.ipWhitelistService.logAccess(clientIP, true, `${userAgent} (SKIPPED)`);
+    // Skip IP check for webhook endpoints (external services)
+    if (req.path.startsWith('/api/webhooks')) {
+      this.ipWhitelistService.logAccess(clientIP, true, `${userAgent} (WEBHOOK)`);
       return next();
     }
 
