@@ -226,7 +226,7 @@ export class FileService {
     );
 
     // Generate summary
-    const summary = await this.aiService.generateSummary(textByPages);
+    const summary = await this.aiService.generateStructuredSummary(textByPages);
 
     // Generate specific questions for user generic queries
     const descriptionAndQuestions = await this.aiService.generateQuestionsFromFile(
@@ -290,8 +290,8 @@ export class FileService {
    */
   private createChunksWithOverlap(
     text: string | null,
-    chunkSize: number = 400,
-    overlapSize: number = 100,
+    chunkSize: number = 300,
+    overlapSize: number = 75,
   ): string[] {
     // Split the text into words
     const words = text?.split(/\s+/).filter((word) => word.length > 0);

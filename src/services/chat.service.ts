@@ -9,6 +9,7 @@ import { FileService } from './file.service';
 import { FolderService } from './folder.service';
 import { PaymentService } from './payment.service';
 import { RawExtractedContent } from 'src/entities/raw-extracted-contents';
+import { ExtractedContent } from 'src/entities/extracted-content.entity';
 
 @Injectable()
 export class ChatService {
@@ -257,76 +258,142 @@ export class ChatService {
     let rawExtractedContents: RawExtractedContent[] = [];
     
     // Optimization 1: Parallel processing and batching
-    const category = await this.aiService.userQueryCategorizer(content);
+    const queries = await this.aiService.userQueryCategorizer(content);
     let questions: string[] = [];
+    const specificQueries = queries.specific;
+    const genericQueries = queries.generic;
+  
+    // Optimized: Batch specific queries processing
+    questions.push(...specificQueries)
     
-    if (content) {
-      if (category === 'SPECIFIC') {
-        const searchResult = await this.aiService.semanticSearch(content, userId, fileContents.map(fc => fc.id))
-        rawExtractedContents = await this.rawExtractedContentsRepository.save(searchResult.hits.map(hit => ({
-          text: (hit.fields as any).chunk_text,
-          fileId: (hit.fields as any).file_id,
-          fileName: (hit.fields as any).file_name,
-          userId: userId,
-          sessionId: sessionId,
-        })))
+    // Parallel semantic searches for specific queries
+    const specificSearchPromises = specificQueries.map(query => 
+      this.aiService.semanticSearch(query, userId, fileContents.map(fc => fc.id))
+    )
+    
+    const specificSearchResults = await Promise.all(specificSearchPromises)
+    
+    // Batch save all raw extracted contents from specific queries
+    const allSpecificRawContents = specificSearchResults.flatMap(searchResult => 
+      searchResult.hits.map(hit => ({
+        text: (hit.fields as any).chunk_text,
+        fileId: (hit.fields as any).file_id,
+        fileName: (hit.fields as any).file_name,
+        userId: userId,
+        sessionId: sessionId,
+      }))
+    )
+    
+    if (allSpecificRawContents.length > 0) {
+      rawExtractedContents = await this.rawExtractedContentsRepository.save(allSpecificRawContents)
+    }
+    
+    // Parallel filter operations for specific queries
+    const specificFilterPromises = specificSearchResults.map(searchResult => 
+      this.aiService.filterSearchResults(searchResult.hits, searchResult.question, content)
+    )
+    
+    const resultsSpecificQueries = await Promise.all(specificFilterPromises)
 
-        const filteredSearchResult = await this.aiService.filterSearchResults(searchResult.hits, searchResult.question, content)
-              
-        extractedContent = [...extractedContent, {
-          fileId: filteredSearchResult.fileId,
-          name: filteredSearchResult.name,
-          content: filteredSearchResult.text,
-          userId: userId,
-        }];
-      } else {
-        // Optimization 2: Parallel processing for GENERIC queries using batch processing
-        // First, get all files in parallel
-        const filePromises = fileContents.map(fileContent => 
-          this.fileService.findOneForChat(fileContent.id)
-        );
-        const files = await Promise.all(filePromises);
-        
-        // Prepare file data for batch processing with cost optimization
-        const fileData = await Promise.all(
-          files.map(async (file) => {
-            if (file.questions && file.questions.length > 0) {
-              return {
-                fileId: file.id,
-                name: file.filename,
-                questions: file.questions,
-                description: file.description || '',
-                // COST OPTIMIZATION: Only pass file text for small files or when questions are insufficient
-                // This reduces API costs significantly for large files
-                summary: file.summary
-              };
-            }
-            return null;
-          })
-        );
-        
-        // Filter out null values and process with batch method
-        const validFileData = fileData.filter(data => data !== null);
-        
-        if (validFileData.length > 0) {
-            // Optimization: Use smart processing strategy for optimal performance
-            const allFileResults = await this.aiService.smartProcessingStrategy(
-              validFileData,
-              content,
-              userId,
-              sessionId,
-              messages[messages.length - 1] ? messages[messages.length - 1].content : '',
-              messages[messages.length - 2] ? messages[messages.length - 2].content : ''
-            );
-            
-            // Add to extracted content
-            extractedContent = [...extractedContent, ...allFileResults.filteredResults];
-            rawExtractedContents = [...rawExtractedContents, ...allFileResults.rawExtractedContent];
-
-          }
+    // Optimized: Batch question generation and parallel processing
+    const allGenericPromises: Promise<{fileId: string; fileName: string; text: string; userId: string}[]>[] = []
+    const allRawContentPromises: Promise<RawExtractedContent[]>[] = []
+    
+    // Batch all question generation requests first
+    const questionGenerationPromises = genericQueries.map(query => 
+      this.aiService.generateQuestionsFromQuery(query, messages.slice(-5), fileContents)
+    )
+    
+    const allQuestionResults = await Promise.all(questionGenerationPromises)
+    
+    // Process all questions in optimized batches
+    // Create all search promises for all query-file combinations at once
+    const allSearchPromises: Promise<any>[] = []
+    const searchMetadata: { query: string; question: string; file: any; queryIndex: number }[] = []
+    
+    for (let i = 0; i < genericQueries.length; i++) {
+      const query = genericQueries[i]
+      const questions = allQuestionResults[i]
+      
+      if (questions.length === 0) continue
+      
+      for (const file of fileContents) {
+        for (const question of questions) {
+          allSearchPromises.push(
+            this.aiService.semanticSearch(question, userId, [file.id])
+          )
+          searchMetadata.push({ query, question, file, queryIndex: i })
+        }
       }
     }
     
+    // Execute all searches in parallel
+    const allSearchResults = await Promise.all(allSearchPromises)
+    
+    // Process all results in parallel
+    const allRawContentBatch: any[] = []
+    const allFilterPromises: Promise<{fileId: string; fileName: string; text: string; userId: string}>[] = []
+    
+    allSearchResults.forEach((searchResult, index) => {
+      const metadata = searchMetadata[index]
+      
+      // Collect raw content
+      const rawContentForBatch = searchResult.hits.map(hit => ({
+        text: (hit.fields as any).chunk_text,
+        fileId: (hit.fields as any).file_id,
+        fileName: (hit.fields as any).file_name,
+        userId: userId,
+        sessionId: sessionId,
+      }))
+      
+      allRawContentBatch.push(...rawContentForBatch)
+      
+      // Create filter promise
+      allFilterPromises.push(
+        this.aiService.filterSearchResults(searchResult.hits, metadata.question, content)
+          .then(result => ({
+            fileId: result.fileId,
+            fileName: result.name,
+            text: result.text,
+            userId: userId,
+          }))
+      )
+    })
+    
+    // Batch save all raw content at once
+    if (allRawContentBatch.length > 0) {
+      allRawContentPromises.push(
+        this.rawExtractedContentsRepository.save(allRawContentBatch)
+      )
+    }
+    
+    // Add all filter promises to the main promise array
+    allGenericPromises.push(Promise.all(allFilterPromises))
+    
+    // Execute all remaining operations in parallel
+    const [resultsGenericQueries, allRawContents] = await Promise.all([
+      Promise.all(allGenericPromises).then(results => results.flat()),
+      Promise.all(allRawContentPromises).then(results => results.flat())
+    ])
+    
+    // Update the rawExtractedContents variable with all batch results
+    rawExtractedContents = [...rawExtractedContents, ...allRawContents]
+
+
+    extractedContent = [...extractedContent, ... resultsGenericQueries.map((result) => ({
+      fileId: result.fileId,
+      name: result.fileName,
+      content: result.text,
+      userId: userId,
+    }))]
+
+    extractedContent = [...extractedContent, ...resultsSpecificQueries.map((result) => ({
+      fileId: result.fileId,
+      name: result.name,
+      content: result.text,
+      userId: userId,
+    }))]
+
 
       console.log(
         '🎯 Chat Service: Starting sendMessage for session',
@@ -455,7 +522,7 @@ export class ChatService {
       let chunkIndex = 0;
 
       // Stream the response from AI service and apply reference replacements progressively
-      for await (const chunk of this.aiService.generateChatResponseStream(messagesToSend)) {
+      for await (const chunk of this.aiService.generateChatResponseStream(messagesToSend, questions)) {
         chunkIndex++;
         streamedContent += chunk;
         
@@ -599,7 +666,7 @@ export class ChatService {
       let aiMessage: ChatMessage;
       try {
         aiMessage = this.chatMessageRepository.create({
-          role: MessageRole.MODEL,
+          role: MessageRole.ASSISTANT,
           content: finalContent,
           conversationSummary: conversationSummary || '',
           citations: finalCitations || [],
@@ -918,7 +985,7 @@ export class ChatService {
         
         // Create the recovery AI message
         const recoveryMessage = this.chatMessageRepository.create({
-          role: MessageRole.MODEL,
+          role: MessageRole.ASSISTANT,
           content: response + '\n\n*[This response was automatically generated during conversation recovery.]*',
           extractedContents: orphanedMessage.extractedContents || [],
           conversationSummary: 'Recovery response',

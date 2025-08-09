@@ -1,10 +1,10 @@
 import { Injectable, InternalServerErrorException, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Pinecone, SearchRecordsResponseResult } from "@pinecone-database/pinecone";
-import { join } from 'path';
+import { format, join } from 'path';
 import { ChatMessage, MessageRole } from "src/entities";
 import OpenAI from "openai";
-import { ResponseInput } from "openai/resources/responses/responses";
+import { ResponseInput, EasyInputMessage } from "openai/resources/responses/responses";
 import { ExtractedContent } from "src/entities/extracted-content.entity";
 import { zodTextFormat } from 'openai/helpers/zod';
 import { z } from 'zod'
@@ -13,10 +13,11 @@ import { response } from "express";
 import { RawExtractedContent } from "src/entities/raw-extracted-contents";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
+import { text } from "stream/consumers";
 
-interface OpenAIMessage {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
+export enum QueryType {
+  SPECIFIC = 'SPECIFIC',
+  BROAD = 'BROAD',
 }
 
 @Injectable()
@@ -208,6 +209,7 @@ export class AIService {
 
   async* generateChatResponseStream(
     messages: ChatMessage[],
+    questions: string[]
   ): AsyncGenerator<string, void, unknown> {
     try {
       const systemPrompt = this.buildSystemPrompt();
@@ -247,22 +249,18 @@ export class AIService {
       }
 
       // Format input for Responses API - can be a simple string or array of message objects
-      const inputContent = messages.map((msg) => {
+      const inputContent: EasyInputMessage[] = messages.map((msg) => {
         const messageExtractedContentStr = `\n\n${msg.extractedContents.map(e => `File Id: ${e.fileId}\nFile Name: ${e.fileName}\nText: ${e.text}\n\n`).join('')}`
         return {
-          role: msg.role === MessageRole.USER ? MessageRole.USER : MessageRole.MODEL,
-          parts: [{
-            text: `${msg.role === MessageRole.USER ? `Context: ${messageExtractedContentStr}` : ``}\n\n${msg.role === MessageRole.USER ? `User query: ${msg.content}` : `Model response: ${msg.content}`}`,
-          }],
+          role: msg.role === MessageRole.USER ? MessageRole.USER : MessageRole.ASSISTANT,
+          content: `${msg.role === MessageRole.USER ? `Context: ${messageExtractedContentStr}` : ``}\n\n${msg.role === MessageRole.USER ? `User query: ${msg.content}` : `Model response: ${msg.content}`}`,
         };
       });
 
       if (messagesWithSummaries.length > 0) {
         inputContent.unshift({
-          role: MessageRole.USER,
-          parts: [{
-            text: conversationSummaryText,
-          }],
+          role: MessageRole.DEVELOPER,
+          content: conversationSummaryText
         });
       }
 
@@ -270,17 +268,31 @@ export class AIService {
         `Calling OpenAI Responses API with ${messages.length} messages (streaming)`,
       );
 
-      const response = await this.gemini.models.generateContentStream({
-        model: this.geminiModels.flash,
-        config: {
-          systemInstruction: systemPrompt,
+      const response = await this.openaiClient.responses.create({
+        model: 'gpt-5-mini-2025-08-07',
+        instructions: systemPrompt,
+        input: inputContent,
+        reasoning: {
+          effort: 'minimal'
         },
-        contents: inputContent,
-        temperature: 0.2,
+        stream: true,
       });
 
-      for await (const chunk of response) {
-        yield chunk.text
+      for await (const event of response) {
+        // Handle different types of stream events for OPENAI
+        if (event.type === 'response.output_text.delta') {
+          yield event.delta;
+        } else if (event.type === 'response.output_text.done') {
+          // Text completion event - could yield final text if needed
+          continue;
+        } else if (event.type === 'response.completed') {
+          // Response completion event
+          break;
+        }
+        // Handle other event types as needed
+
+        // HANDLE GEMINI
+        // yield event.text
       }
     } catch (error: unknown) {
       this.logger.error('Error in generateChatResponse:', error);
@@ -304,11 +316,13 @@ export class AIService {
       SOURCES:
       1. Context: Text portions with id, title, and content
       2. History Summaries: Previous conversation summaries
+      3. Questions: Used for semantic search retrieval
       
       RULES:
-      - Use ONLY provided context, no external knowledge
+      - Prioritize the provided context over your general knowledge when responding to the user query.
       - Every statement MUST have a reference
-      - If no relevant info found: "The requested information was not found in the file context. Please try again providing more context."
+      - Don't repeat the information that you provide in the references, in your statements
+      - If no relevant info found, respond the following (translate it if the user talks to you in another language): "The requested information was not found in the file context. Please try again providing more context."
       - Match user's language but keep reference text in original language
       
       REFERENCE FORMAT (required for each statement):
@@ -333,73 +347,151 @@ export class AIService {
 
       NOTE 2: The references' text should be exactly as you received it in the context. DO NOT add or remove any characters. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, and ANY character that was in the original chunk text, including numbers as well.
 
-      NOTE 3: NEVER combine the text of multiple references. If you need to provide multiple references, provide them in different opening and closing reference tags ([REF] and [/REF]).
+      NOTE 3: NEVER provide references longer than one sentence, the references' text must ALWAYS be one sentence long. If you need to provide multiple sentences, provide multiple references, each one in a different opening and closing reference tags ([REF] and [/REF]).
 
-      NOTE 4: It is EXTREMELY IMPORTANT that when providing references, you DON'T modify the text of the references. You must only provide the references' text as they are in the file content.
+      NOTE 4: It is EXTREMELY IMPORTANT that when providing the text of the references, you NEVER add or remove any characters from it, of any type. You MUST select one sentence from the context provided, as stated in NOTE 3, but you should NEVER add or remove any characters from that sentence you have selected as text of the reference.
 
       NOTE 5: When providing each reference, ALWAYS open and close the reference tags ([REF] and [/REF]).
 
-      NOTE 6: When suitable, provide titles, subtitles, bullet point lists, numbered lists, and other markdown formatting elements to improve the readability of the response.
+      NOTE 6: When responding, provide markdown formatting elements to improve the readability of the response, organizing the response in sections. For example, headings, subheadings, font bold, italic, bullet points, and numbered lists. Use headings with #, ##, ###; bold with **; italic with *; bullet points with -; and numbered lists with 1., 2., 3., etc.
+
+      NOTE 7: Don't provide the same reference multiple times, only once.
+
+      NOTE 8: Respond with information relevant to the user query. On that note, you don't have to return all the information of the context provided to you.
+
+      NOTE 9: Don't repeat the exact same text from the references' text in the statements you provide.
     `;
 
     return prompt;
   }
 
-  async userQueryCategorizer(query: string): Promise<string> {
+  async userQueryCategorizer(query: string): Promise<{
+    specific: string[],
+    generic: string[],
+  }> {
     try {
-      // Optimization: Use OpenAI with structured output for better performance and consistency
-      /*const categoryFormat = z.object({
-        category: z.enum(['SPECIFIC', 'GENERIC']),
-        confidence: z.union([z.number(), z.null()])
-      });*/
+      console.log('Input query for categorization:', query);
 
-      const response = await this.gemini.models.generateContent({
-        model: this.geminiModels.flashLite,
-        contents: query,
-        config: {
-          systemInstruction: `Categorize a query as needing a SPECIFIC or BROAD response. Depending on that, the query will be further processed or sent directly to request a semantic search on a vector store.
-          
-          SPECIFIC: The query needs a concise and specific response.
-
-          Examples of query that needs a specific response:
-          - What was the percentage of patients that had high blood pressure?
-          - How many participants were included in the study?
-          - How many categories were the participants divided in?
-          - What is the first law of thermodynamics?
-          - What are the byproducts of oxidative phosphorilation?
-          - In what period did the t rex live?
-          - Who discovered the electron and in what year?
-          - What is the charge of the proton?
-          - What is the name of study?
-          
-          GENERIC: The query needs a relatively long and broad response, because it requires multiple things to be mentioned or explained.
-
-          Examples of query that needs a broad response:
-          - Explain the theory of general relativity
-          - What was the methodology used in this study?
-          - Provide a summary of the biography of Isaac Newton
-          - How was the periodic table developed?
-          - How were the conditions of the earth when there was no life on it yet?
-          - Explain the process of oxidative phosphorilation
-          
-          OUTPUT: JSON with category (SPECIFIC/BROAD)`,
-          temperature: 0.1,
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              category: {
-                type: Type.STRING
-              }
-            }
-          }
-        },
+      const schema = z.object({
+        specific: z.array(z.string()),
+        generic: z.array(z.string()),
       });
 
-      return JSON.parse(response.text)?.category || 'BROAD';
+      const response = await this.openaiClient.responses.parse({
+        model: 'gpt-5-nano-2025-08-07',
+        input: query,
+        text: {
+          format: zodTextFormat(schema, "event"),
+        },
+        instructions: `
+You are a query categorizer. Your task is to:
+
+1. Take the EXACT user query as provided
+2. If it contains multiple distinct questions, break it down into atomic sub-queries
+3. Categorize each query/sub-query as "specific" or "generic"
+4. DO NOT generate new questions - only work with what the user actually asked
+
+CATEGORIZATION RULES:
+
+SPECIFIC queries:
+- Ask for precise facts, numbers, definitions, or single concepts
+- Can be answered with 1-2 sentences from a document
+- Work well with semantic search
+
+GENERIC queries:
+- Ask for summaries, overviews, or broad explanations
+- Require synthesis of multiple concepts
+- Need comprehensive responses
+
+EXAMPLES:
+
+EXAMPLE 1
+Input: "What is the sample size and what were the main findings?"
+Output:
+{
+  "specific": ["What is the sample size?"],
+  "generic": ["What were the main findings?"]
+}
+
+EXAMPLE 2
+Input: "How many participants were there?"
+Output:
+{
+  "specific": ["How many participants were there?"],
+  "generic": []
+}
+
+EXAMPLE 3
+Input: "Summarize this document"
+Output:
+{
+  "specific": [],
+  "generic": ["Summarize this document"]
+}
+
+EXAMPLE 4
+Input: "provide a detailed analysis of this file"
+Output:
+{
+  "specific": [],
+  "generic": ["provide a detailed analysis of this file"]
+}
+
+IMPORTANT:
+- Always return valid JSON with both "specific" and "generic" arrays
+- If unsure, categorize as "generic"
+- Single queries should go in one category only`,
+      reasoning: {
+        effort: 'minimal'
+      }
+    });
+
+      console.log('Raw response from model:', response.text);
+      
+      let parsedResponse;
+      try {
+        parsedResponse = response.output_parsed;
+        console.log('Parsed response:', parsedResponse);
+      } catch (parseError) {
+        console.error('JSON parsing failed:', parseError.message);
+        // Fallback: treat as generic query
+        return {
+          specific: [],
+          generic: [query],
+        };
+      }
+
+      // Validate response structure
+      if (!parsedResponse.specific || !parsedResponse.generic) {
+        console.warn('Invalid response structure, using fallback');
+        return {
+          specific: [],
+          generic: [query], // Fallback: treat as generic if structure is invalid
+        };
+      }
+
+      const specificLength = parsedResponse.specific.length;
+      const genericLength = parsedResponse.generic.length;
+      console.log(`Categorization result - Specific: ${specificLength}, Generic: ${genericLength}`);
+
+      // If both arrays are empty, fallback to treating the original query as generic
+      if (specificLength === 0 && genericLength === 0) {
+        console.warn('Both arrays empty, using fallback categorization');
+        return {
+          specific: [],
+          generic: [query],
+        };
+      }
+
+      return parsedResponse;
     } catch (error) {
       console.error('Error categorizing user query:', error);
-      return 'BROAD';
+      console.error('Query that caused error:', query);
+      // Fallback: treat as generic query
+      return {
+        specific: [],
+        generic: [query],
+      };
     }
   }
 
@@ -411,37 +503,52 @@ export class AIService {
     hits: SearchRecordsResponseResult['hits'],
     question: string,
   }> {
+    const kValue = 4;
+    const rerankingModel = 'bge-reranker-v2-m3';
+    const rerankOptions = {
+      topN: 2,
+      rankFields: ['chunk_text'],
+      returnDocuments: true,
+      parameters: {
+        truncate: 'END'
+      }, 
+    };
     const index = this.pc.index(
       this.configService.get('PINECONE_INDEX_NAME') as string,
       this.configService.get('PINECONE_INDEX_HOST') as string,
     );
     const namespace = index.namespace(userId);
-    const describedNamespace = await namespace.describeNamespace(userId);
-    const recordCount = describedNamespace.recordCount;
-    const recordCountNumber = Number(recordCount);
-    const isRecordCountNumber = !isNaN(recordCountNumber);
-    const topK = isRecordCountNumber
-      ? recordCountNumber < 3
-        ? recordCountNumber
-        : 3
-      : 3;
-    const topN = isRecordCountNumber
-      ? topK < 5
-        ? Math.floor(topK - topK * 0.2)
-        : 5
-      : 5;
-    const lessThan250Words = this.countWords(query) < 250;
+    // const describedNamespace = await namespace.describeNamespace(userId);
+    // const recordCount = describedNamespace.recordCount;
+    // const recordCountNumber = Number(recordCount);
+    // const isRecordCountNumber = !isNaN(recordCountNumber);
+    // const topK = isRecordCountNumber
+    //   ? recordCountNumber < 3
+    //     ? recordCountNumber
+    //     : 3
+    //   : kValue;
+    // const topN = isRecordCountNumber
+    //   ? topK < 5
+    //     ? Math.floor(topK - topK * 0.2)
+    //     : 5
+    //   : 5;
+    // const lessThan250Words = this.countWords(query) < 250;
 
     const response = await namespace.searchRecords({
       query: {
-        topK: topK,
+        topK: kValue,
         inputs: { text: query },
         filter: {
           userId: userId,
           ...(fileIds && fileIds.length > 0 ? { fileId: { $in: fileIds } } : {}),
-        }
+        },
       },
       fields: ['chunk_text', 'fileId', 'name', 'userId'],
+      rerank: {
+        model: 'bge-reranker-v2-m3',
+        rankFields: ['chunk_text'],
+        topN: 1,
+      }
       /*...(lessThan250Words
         ? {
             rerank: {
@@ -494,23 +601,33 @@ export class AIService {
     }
   }
 
-  async generateSummary(fileContent: string | null): Promise<string> {
+  async generateStructuredSummary(fileContent: string | null): Promise<string> {
     try {
       // Prepare the prompt for generating a summary
       const prompt = `${fileContent}`;
 
-      const result = await this.gemini.models.generateContent({
-        model: this.geminiModels.flash,
-        contents: prompt,
-        config: {
-          systemInstruction:
-            `You are an extensive summary generator. You will receive the extracted text from a file. Generate an extensive summary of that text. Return ONLY the summary text, nothing else. The summary should be around 20% long of the file text. If the text contains 10000 words, the summary should have around 2000 words; if the text contains 20000 words, the summary should have around 4000 words. The summary should contain general information about the file, but also some specific information that would allow the user to understand the file's content further. The summary should be in the same language as the original text.
-            
-            Note: Ignore the [START_PAGE] and [END_PAGE] markers, they are not part of the text that you should summarize. They are just used to indicate the start and end of a page in the original file.`,
-          temperature: 0.2,
-        },
+      const result = await this.openaiClient.responses.create({
+        model: 'gpt-5-nano-2025-08-07',
+        input: prompt,
+        instructions:
+          `You are an structured summary generator. You will receive the extracted text from a file. Generate a structured summary of that text. Return ONLY the structured summary text, nothing else. It should contain the main sections and secondary sections distributed in the order they appear in the file. Each section should have it's short description (make it concise).
+
+
+          Example: Research study
+          Structured summary:
+          1. Introduction: [SUMMARY OF THE INTRODUCTION]
+          2. Materials and Methods: [SUMMARY OF THE MATIERLAS AND METHODS SECTION]
+          3. Results: [SUMMARY OF THE RESULTS SECTION]
+          4. Discussion: [SUMMARY OF THE DISCUSSION SECTION]
+          5. Conclusions: [SUMMARY OF THE CONCLUSIONS SECTION]
+
+          In this example you can see only main sections, but if the file is substantially larger, provide the secondary sections inside the main sections as well.
+
+          Remember keeping the descriptions short. They should be enough to convey the main point of the section. But must not be larger than around 75 words.
+          
+          Note: This structured summary will be used to later retrieve information from the file by generating questions, so it should be tailored for this purpose.`,
       });
-      const summary = result.text;
+      const summary = result.output_text;
 
       // Limit the length and remove any quotes
       return summary ? summary : `The file has no summary`;
@@ -551,27 +668,27 @@ export class AIService {
 
   async loadReferenceAgain(textToSearch: string, context: RawExtractedContent[]): Promise<string> {
     try {
-      const response = await this.gemini.models.generateContent({
-        model: this.geminiModels.flash,
-        contents: `Text snippet to search for: "${textToSearch}"
+      const response = await this.openaiClient.responses.create({
+        model: 'gpt-5-mini-2025-08-07',
+        input: `Text snippet to search for: "${textToSearch}"
 
         Files context: \n${context.map((c) => c.text).join('\n')}`,
-        config: {
-          systemInstruction: `You have to do the following tasks in this exact order: 
+        instructions: `You have to do the following tasks in this exact order: 
 
 1. Search for a text snippet inside the Files context, that is a set of text chunks from one or more files that are distributed in an unorderly way. The text you are searching for might not be an exact match to what is in the Files context. It could have minor variations in wording, characters, punctuation, or spacing.
 
-2. If you find the text snippet, but it is split into two parts by other content (such as information that could have been extracted from a table, graph, or other unrelated text, or the [START_PAGE] and [END_PAGE] markers), you must identify both parts. After identifying both parts, you must return ONLY the longer of the two parts. Do not include the content that was in the middle.
+2. If you find the text snippet, but it is split into two parts by other content (such as information that could have been extracted from a table or graph), you must identify both parts. After identifying both parts, you must return ONLY the longer of the two parts. Do not include the content that was in the middle.
 
-3. If you find the text snippet and it is not split, but contains minor variations (e.g., different punctuation, a few different words or characters), return it exactly as it appears in the Files context.
+3. If you find the text snippet and it is not split, but contains minor variations (e.g., different punctuation, different characters, letters, numbers, or special characters), return it exactly as it appears in the Files context. Even if the wording doesn't make sense, for example, joined words, extra characters or spaces, missing characters or spaces, return it exactly as it appears in the Files context, not in the text snippet.
 
-4. If you do not find the text snippet in the Files context (neither whole, with minor variations, nor split), then you must return the text snippet exactly as you received it.
+4. If you do not find the text snippet in the Files context (neither whole, with minor variations, or split), then you must return the text snippet exactly as you received it.
 `,
-          temperature: 0.2,
+        reasoning: {
+          effort: 'low'
         },
       });
 
-      let result = response.text;
+      let result = response.output_text;
 
       const result2 = await this.filterReferencesNumericalRef(result);
       return result2 ? result2 : textToSearch; // Return the original text if no result found
@@ -591,20 +708,22 @@ export class AIService {
     textToSearch: string,
   ): Promise<string> {
     try {
-      const response = await this.gemini.models.generateContent({
-        model: this.geminiModels.flash,
-        contents: `${textToSearch}`,
-        config: {
-          systemInstruction: `You will receive a text. Your task is to filter the text following the rule below:
+      const response = await this.openaiClient.responses.create({
+        model: 'gpt-5-mini-2025-08-07',
+        input: `${textToSearch}`,
+        instructions: `You will receive a text. Your task is to filter the text following the rule below:
 
-          - The text can be split by one or more consecutive or disperse numerical references (that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc.), you must identify the parts of the text that are split by the numerical references. After identifying the parts, you must modify the text to ONLY contain the longest of the parts. Do not include all the parts. After selecting the longest part, remove the numerical references from it, if it still has them. Take into account that the numerical references could be separated by a comma, a space, or enclosed in square brackets, so you must be careful to identify them correctly. Also take into account that the text can contain numbers that ARE NOT numerical references, so you must be careful to only remove the numbers that are numerical references, and not those that are not. To understand which are the numerical references and which are not, you must take into account the context of the text of the reference, and the fact that numerical references are usually used to refer to a specific piece of information, so they don't have semantic continuity with the text they are in. While numbers that are not numerical references are usually part of the text itself, and they fit within the meaning of the text they are in. For example, in a sentence like "The study was conducted in 2023", the number 2023 is not a numerical reference, but part of the text; or in a sentence like "There were 97 participants in the study", the number 97 is not a numerical reference, but part of the text.
-          
-          After filtering the text, you must return the modified text. If there are no numerical references in the text, you must return the text as you received it.`,
-          temperature: 0.2,
+        - The text can be split by one or more consecutive or disperse numerical references (that could be in different formats, such as [1], [2], [3], or just 1, 2, 3, etc.), you must identify the parts of the text that are split by the numerical references. After identifying the parts, you must modify the text to ONLY contain the longest of the parts. Do not include all the parts. After selecting the longest part, remove the numerical references from it, if it still has them. Take into account that the numerical references could be separated by a comma, a space, or enclosed in square brackets, so you must be careful to identify them correctly. Also take into account that the text can contain numbers that ARE NOT numerical references, so you must be careful to only remove the numbers that are numerical references, and not those that are not. To understand which are the numerical references and which are not, you must take into account the context of the text, and the fact that numerical references are usually used to refer to a specific piece of information, so they don't have semantic continuity with the text they are in. While numbers that are not numerical references are usually part of the text itself, and they fit within the meaning of the text they are in. For example, in a sentence like "The study was conducted in 2023", the number 2023 is not a numerical reference, but part of the text; or in a sentence like "There were 97 participants in the study", the number 97 is not a numerical reference, but part of the text.
+        
+        After filtering the text, you must return the modified text. If there are no numerical references in the text, you must return the text as you received it.
+        
+        Aside from the numerical references, you MUST NOT modify anything from the text.`,
+        reasoning: {
+          effort: 'minimal'
         },
       });
 
-      let result = response.text;
+      let result = response.output_text;
       return result ? result : textToSearch; // Return the original text if no result found
     } catch (error) {
       console.error(
@@ -739,68 +858,50 @@ export class AIService {
 
     const searchDataStr = `${searchData.map(sd => `Chunk:\nFileId: ${sd.id}\nName: ${sd.name}\nText: ${sd.chunk}`).join('\n\n')}`
 
-    /*const responseFormat = z.object({
+    const responseFormat = z.object({
       fileId: z.string(),
       name: z.string(),
       text: z.string(),
-    });*/
+    });
 
-    const result = await this.gemini.models.generateContent({
-      model: this.geminiModels.flashLite,
-      config: {
-        systemInstruction: `Filter text chunks to extract the shortest text snippet possible that answers the user query (no longer than one sentence).
+    const response = await this.openaiClient.responses.parse({
+      model: 'gpt-5-mini-2025-08-07',
+      instructions: `Filter text chunks to extract the shortest text snippet possible that answers the user query (no longer than one sentence).
         
-        TASK: Find the most relevant text snippet
-        - Extract the single most relevant text snippet that directly answers the query from the chunks that you receive (no longer than one sentence).
-        - If the text you want to return starts in one chunk and ends in another, return the part from the first chunk followed by the part from the second chunk, as if it is a single, continuous text. For this case, the chunks will have overlap, so you will have to take the text snippet from the first chunk and add the corresponding text snippet from the second chunk to continue the statement, without duplicating the overlap.
-        - DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, and ANY character that was in the original chunk text, including numbers as well.
+      TASK: Find the most relevant text snippet
+      - Extract the single most relevant text snippet that directly answers the query from the chunks from a file that you receive (no longer than one sentence).
+      - DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, and ANY character that was in the original chunk text, including numbers as well.
 
-        - Return empty strings if no relevant content found
+      INPUT: Query + array of {id, name, text} objects
+      OUTPUT: JSON with fileId, name, and the extracted text snippet
+        
+      EXAMPLE OUTPUT:
+      {"fileId": "123", "name": "Example File", "text": "This is the extracted text snippet."}
       
-        INPUT: Query + array of {id, name, text} objects
-        OUTPUT: JSON with fileId, name, and the extracted text snippet
+      NOTE 1: If the text is split in two parts by information that was extracted from tables or graphs, provide only the longest coherent part of the two.
         
-        EXAMPLE OUTPUT:
-        {"fileId": "123", "name": "Example File", "text": "This is the extracted text snippet."}
+      NOTE 2: The extracted text snippet should be in the same language as the text chunks.
       
-        NOTE 1: If the text is split in two parts by information that was extracted from tables or graphs, provide only the longest coherent part of the two.
-        
-        NOTE 2: The extracted text snippet should be in the same language as the text chunks.
-        
-        NOTE 3: Before returning the text snippet, see if it contains the [START_PAGE] and/or [END_PAGE] markers. If it has them, don't remove them and return the text with them included.`,
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            fileId: {
-              type: Type.STRING,
-            },
-            name: {
-              type: Type.STRING,
-            },
-            text: {
-              type: Type.STRING,
-            }
-          }
-        }
+      NOTE 3: If the text doesn't contain any relevant information to answer the query, return empty strings for fileId, name, and text.`,
+
+      input: `Query: ${question}\n\nChunks: \n${searchDataStr}`,
+      text: {
+        format: zodTextFormat(responseFormat, "filter_text")
       },
-      contents: `Query: ${question}\n\nChunks: \n${searchDataStr}`,
-      temperature: 0.2,
+      reasoning: {
+        effort: 'minimal'
+      }
     })
 
-    const parsedResult = JSON.parse(result.text);
+    const parsedResult = response.output_parsed
 
-    const result2 = await this.gemini.models.generateContent({
-      model: this.geminiModels.flash,
-      config: {
-        systemInstruction: `Filter the text following these guidelines:
-        
-        1. If the text contains [START_PAGE] and [END_PAGE] markers in the middle, or either of the markers at the start or the end, follow the following steps:
-          I. Split the text by the markers.
-          II. Return only the longest part of the two. Remove the page markers but DO NOT add ellipses (...).
-          III. If one or two of the markers are at the start or end of the text, just remove the markers and return the rest of the text.
+    let response2
+    if (parsedResult?.text) {
+      response2 = await this.openaiClient.responses.create({
+        model: 'gpt-5-nano-2025-08-07',
+        instructions: `Filter the text following these guidelines:
 
-        2. If the text has numerical references like [1], [2], [3] or 1, 2, 3, follow the following steps:
+        1. If the text has numerical references like [1], [2], [3] or 1, 2, 3, follow the following steps:
           I. Split the text by the numerical references. These numerical references are detectable by seeing if the numbers present have semantical coherence with the rest of the text in which they are in. If they are random numbers inserted that don't have semantical coherence with the rest of the text, it is because they are numerical references. If, the numbers fit semantically within the text they are in, return the whole text.
           II. Return only the longest part of the parts that were divided by these numerical references.
           III. If the text doesn't have numerical references, return the whole text.
@@ -815,21 +916,23 @@ export class AIService {
             b. The participants in the experimental group received between 2 and 3 doses of the medication, same as the placebo group.
             c. The psychological test, comprised of 87 questions, evaluates different aspects of emotional intelligence.
 
+        2. If the text contains the [START_PAGE] and [END_PAGE] markers in the middle, return the text with the markers, don't remove them.
+
         NOTE: DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, ", ', and ANY character that was in the original chunk text.
         `,
-      },
-      contents: parsedResult.text || '',
-      temperature: 0.2,
-      },
-    )
-
-    const response = {
-      fileId: parsedResult.fileId || '',
-      name: parsedResult.name || '',
-      text: result2.text || '',
+        input: parsedResult?.text || '',
+        reasoning: {
+          effort: 'minimal'
+        },
+      })
+    }
+    const result = {
+      fileId: parsedResult ? parsedResult.fileId : '',
+      name: parsedResult ? parsedResult.name : '',
+      text: response2?.output_text || parsedResult?.text || '',
     }
 
-    return response || { fileId: '', name: '', text: '' };
+    return result || { fileId: '', name: '', text: '' };
   }
 
   async determineIfQuestionsAnswerQuery(
@@ -1317,5 +1420,132 @@ export class AIService {
         rawExtractedContent: [],
       };
     }
+  }
+
+  async generateQuestionsFromQuery(query: string, messages: ChatMessage[], fileContents: {
+    id: string,
+    name: string,
+    summary: string,
+    originalName: string,
+  }[]): Promise<string[]> {
+
+    // Format conversation summaries if available
+    let conversationSummaryText = '';
+    
+    // Find all messages that have conversation summaries (regardless of position)
+    const messagesWithSummaries = messages.filter(msg => 
+      msg.conversationSummary && 
+      msg.conversationSummary !== 'No summary available' &&
+      msg.conversationSummary.trim() !== ''
+    );
+    
+    if (messagesWithSummaries.length > 0) {
+      const conversationSummaries: string[] = [];
+      
+      // Sort by creation date to maintain chronological order
+      const sortedSummaryMessages = messagesWithSummaries.sort((a, b) => 
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      
+      sortedSummaryMessages.forEach((msg, index) => {
+        // Calculate the approximate message range this summary covers
+        // Each summary covers roughly 5 messages, but we don't assume exact positions
+        const summaryNumber = index + 1;
+        const estimatedStart = summaryNumber * 5 - 4;
+        const estimatedEnd = summaryNumber * 5;
+        
+        conversationSummaries.push(
+          `Summary ${summaryNumber} (approximately messages ${estimatedStart}-${estimatedEnd}): ${msg.conversationSummary || 'No summary available'}`
+        );
+      });
+
+      // Add conversation summaries to system prompt if we have any
+      conversationSummaryText = `\n\nConversation History Summaries:\n\n${conversationSummaries.join('\n\n')}`;
+      }
+
+    const questionsFormat = z.object({
+      questions: z.array(z.string()),
+    });
+
+    const response = await this.openaiClient.responses.parse({
+      model: 'gpt-5-mini-2025-08-07',
+      input: `User query: ${query}\n\nMessages: ${messages.map(message => `${message.role}: ${message.content}`).join('\n')}\n\n${conversationSummaryText}\n\nFiles' structure summaries: ${fileContents.map(file => `${file.originalName}: ${file.summary}`).join('\n')}`,
+      instructions: `Follow these tasks in order:
+    
+      1. Determine if the user query is very specific.
+      
+      2. If the user query is not very specific, use the conversation history and the files' structure summaries to generate very specific questions.
+      
+      3. If the user query is not very specific, leave it as it is.
+      
+      4. Return the questions in case you generated new ones, or the user query in case you didn't, in a specific output JSON format.
+
+      These questions, when responded, should cover all the possible ways the user query can be answered, based on the structure of the files. For example, if the user asks for a summary of a research paper, you must generate very specific questions that, when answered, will help a later reader understand all the main sections of the file, like the different aspects of the methodology, results, limitations, recommendations, conclusions, etc. In other words, you should crumble the user query into smaller questions that can be answered with very specific responses, not with  broad responses, that precisely ask about specific things, not general ones.
+      
+      OUTPUT JSON FORMAT:
+      {
+        questions: [
+          'Question 1',
+          'Question 2',
+          'Question 3',
+          ...
+        ]
+      }
+
+      EXAMPLES:
+      1. User query: "what were the methodologies used in the study?"
+      Output: 
+      {
+        "questions": [
+          "what tests were used in the study?",
+          "what tests did they use for measuring [VARIABLE STUDIED]?",
+          "what was the sample size?",
+          "what was the research design?",
+          "what was the research methodology?",
+          "what was the research question?",
+        ]
+      }
+      2. User query: "provide a detailed summary of the file"
+      Output: 
+      {
+        "questions": [
+          "What is the main research question or objective of this study?",
+          "What is the methodology used in this research?",
+          "What is the sample size and population characteristics?",
+          "What statistical tests and analyses were performed?",
+          "What were the key findings and results?",
+          "What are the main conclusions drawn from the results?",
+          "What limitations were identified in the study?",
+          "What theoretical framework or models were used?",
+          "What variables were measured and how?",
+          "What instruments or tools were used for data collection?",
+          "How was data validity and reliability ensured?",
+          "What ethical considerations were addressed?",
+          "What were the inclusion and exclusion criteria?",
+          "What previous research or literature was cited as foundation?",
+          "What recommendations were made for future research?"
+        ]
+      }
+
+      As you can see from the examples, the questions should be as specific as possible, not asking broad questions like "provide a summary of the document", "what are the key points of the document?", "what was the methodology of the study?", "what are the main takeaways of the file?".
+        
+      NOTE 1: Use your knowledge base to understand what questions can be generated from the user query. For example, if the user query is "what tests were used in the study?", you know that there are usually multiple types of tests used in a study: statistical, psychological, medical, etc. You should generate questions to retrieve information of all those types of tests from the vector store. In other words, you should generate the questions to cover everything that can be associated with the user query, based on the structure of the files. If the user asks for a summary, the key points, a detailed summary, or anything that should cover the whole files, yous should generate questions that cover ALL the main sections of the files.
+      
+      NOTE 2: Make the questions as atomic as possible. For example, if the user query is "what tests were used in the study?", you should generate questions like "what statistical tests were used in the study?", "what tests did they use for measuring [VARIABLE STUDIED]?", "what was the sample size?", etc.
+      
+      NOTE 3: The questions should be in the same language as the user query.
+      
+      NOTE 4: Don't include the name of the files in the questions.
+      
+      NOTE 5: Only one thing should be asked with each question, not multiple things. For example, 'What are the main results, conclusions, or recommendations provided?' this question should be divided in "What are the main results?", "What did the authors recommend?", "What were the main conclusions?".`,
+      text: {
+        format: zodTextFormat(questionsFormat, 'questions'),
+      },
+      reasoning: {
+        effort: "minimal"
+      }
+    })
+
+    return response.output_parsed?.questions || []
   }
 }
