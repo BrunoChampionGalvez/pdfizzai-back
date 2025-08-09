@@ -39,6 +39,9 @@ export class FileService {
     this.pc = new Pinecone({
       apiKey: this.configService.get('PINECONE_API_KEY') as string,
     });
+    console.log('GCS_API_KEY', this.configService.get('GCS_API_KEY'));
+
+    
     this.googleStorage = new Storage({
       apiKey: this.configService.get('GCS_API_KEY') as string,
     });
@@ -90,6 +93,9 @@ export class FileService {
     const filePath = `${userId}_${Date.now()}_${fileData.originalname}`;
     fs.writeFileSync(filePath, fileData.buffer);
     const virtualPath = filePath;
+
+    console.log('GCS_BUCKET_NAME', this.configService.get('GCS_BUCKET_NAME'));
+    console.log('GCS_ACCESS_TOKEN', this.configService.get('GCS_ACCESS_TOKEN'));
 
     try {
       const response = await this.googleStorage.bucket(this.configService.get('GCS_BUCKET_NAME') as string).upload(virtualPath);
