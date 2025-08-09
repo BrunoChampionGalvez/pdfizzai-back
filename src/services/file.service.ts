@@ -39,7 +39,8 @@ export class FileService {
     this.pc = new Pinecone({
       apiKey: this.configService.get('PINECONE_API_KEY') as string,
     });
-    console.log('GCS_API_KEY', this.configService.get('GCS_API_KEY'));
+    console.log('GCS_API_KEY', this.configService.get('GCS_API_KEY') ? 'Present' : 'Not Present');
+
 
     
     this.googleStorage = new Storage({
