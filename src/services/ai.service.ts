@@ -359,7 +359,7 @@ export class AIService {
 
       NOTE 8: NEVER repeat the exact same text from the references' text in the statements you provide.
 
-      NOTE 9: NEVER ask the user to provide information. What you can do if you need more information or the information in the context provided to you is not enough is tell the user "Try to rephrase your question in a more specific way, so I can provide you with more accurate information." or the corresponding translated version in the user's language.
+      NOTE 9: NEVER ask the user to provide information. What you can do if you need more information or the information in the context provided to you is not enough is tell the user in the language he speaks to you "Try to rephrase your question in a more specific way, so I can provide you with more accurate information.".
 
       NOTE 10: NEVER ask the user further questions about how he would like your response. Just use the context provided and the user query to answer the question. For example, dont ask him "Do you prefer a section-by-section detailed analysis or a one long paragraph summary?".
 
