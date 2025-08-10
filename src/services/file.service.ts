@@ -41,10 +41,11 @@ export class FileService {
     });
     console.log('GCS_API_KEY', this.configService.get('GCS_API_KEY') ? 'Present' : 'Not Present');
 
-
+    const buffer = Buffer.from(this.configService.get('GCS_SERVICE_ACCOUNT_ENCODED'), 'base64')
+    const credentials = JSON.parse(buffer.toString('utf-8'))
     
     this.googleStorage = new Storage({
-      apiKey: this.configService.get('GCS_API_KEY') as string,
+      credentials,
     });
   }
 
