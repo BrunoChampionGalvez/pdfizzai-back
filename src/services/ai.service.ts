@@ -673,7 +673,7 @@ IMPORTANT:
   async loadReferenceAgain(textToSearch: string, context: RawExtractedContent[]): Promise<string> {
     try {
       const response = await this.openaiClient.responses.create({
-        model: 'gpt-5-nano-2025-08-07',
+        model: 'gpt-5-mini-2025-08-07',
         input: `Text snippet to search for: "${textToSearch}"
 
         Files context: \n${context.map((c) => c.text).join('\n')}`,
@@ -688,7 +688,7 @@ IMPORTANT:
 4. If you do not find the text snippet in the Files context (neither whole, with minor variations, or split), then you must return the text snippet exactly as you received it.
 `,
         reasoning: {
-          effort: 'medium'
+          effort: 'minimal'
         },
       });
 
@@ -713,7 +713,7 @@ IMPORTANT:
   ): Promise<string> {
     try {
       const response = await this.openaiClient.responses.create({
-        model: 'gpt-5-nano-2025-08-07',
+        model: 'gpt-5-mini-2025-08-07',
         input: `${textToSearch}`,
         instructions: `You will receive a text. Your task is to filter the text following the rule below:
 
@@ -723,7 +723,7 @@ IMPORTANT:
         
         Aside from the numerical references, you MUST NOT modify anything from the text.`,
         reasoning: {
-          effort: 'medium'
+          effort: 'minimal'
         },
       });
 
