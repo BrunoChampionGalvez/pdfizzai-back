@@ -503,7 +503,7 @@ IMPORTANT:
     hits: SearchRecordsResponseResult['hits'],
     question: string,
   }> {
-    const kValue = 4;
+    const kValue = 2;
     const rerankingModel = 'bge-reranker-v2-m3';
     const rerankOptions = {
       topN: 2,
@@ -544,11 +544,11 @@ IMPORTANT:
         },
       },
       fields: ['chunk_text', 'fileId', 'name', 'userId'],
-      rerank: {
-        model: 'bge-reranker-v2-m3',
-        rankFields: ['chunk_text'],
-        topN: 1,
-      }
+      // rerank: {
+      //   model: 'bge-reranker-v2-m3',
+      //   rankFields: ['chunk_text'],
+      //   topN: 1,
+      // }
       /*...(lessThan250Words
         ? {
             rerank: {
