@@ -688,7 +688,7 @@ IMPORTANT:
 4. If you do not find the text snippet in the Files context (neither whole, with minor variations, or split), then you must return the text snippet exactly as you received it.
 `,
         reasoning: {
-          effort: 'low'
+          effort: 'medium'
         },
       });
 
