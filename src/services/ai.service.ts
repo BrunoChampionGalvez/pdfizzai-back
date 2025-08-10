@@ -723,7 +723,7 @@ IMPORTANT:
         
         Aside from the numerical references, you MUST NOT modify anything from the text.`,
         reasoning: {
-          effort: 'high'
+          effort: 'medium'
         },
       });
 
@@ -893,7 +893,7 @@ IMPORTANT:
         format: zodTextFormat(responseFormat, "filter_text")
       },
       reasoning: {
-        effort: 'low'
+        effort: 'minimal'
       }
     })
 
@@ -926,7 +926,7 @@ IMPORTANT:
         `,
         input: parsedResult?.text || '',
         reasoning: {
-          effort: 'low'
+          effort: 'minimal'
         },
       })
     }
@@ -1546,7 +1546,7 @@ IMPORTANT:
         format: zodTextFormat(questionsFormat, 'questions'),
       },
       reasoning: {
-        effort: "low"
+        effort: "minimal"
       }
     })
 
