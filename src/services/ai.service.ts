@@ -269,11 +269,11 @@ export class AIService {
       );
 
       const response = await this.openaiClient.responses.create({
-        model: 'gpt-5-mini-2025-08-07',
+        model: 'gpt-5-nano-2025-08-07',
         instructions: systemPrompt,
         input: inputContent,
         reasoning: {
-          effort: 'minimal'
+          effort: 'medium'
         },
         stream: true,
       });
@@ -673,7 +673,7 @@ IMPORTANT:
   async loadReferenceAgain(textToSearch: string, context: RawExtractedContent[]): Promise<string> {
     try {
       const response = await this.openaiClient.responses.create({
-        model: 'gpt-5-mini-2025-08-07',
+        model: 'gpt-5-nano-2025-08-07',
         input: `Text snippet to search for: "${textToSearch}"
 
         Files context: \n${context.map((c) => c.text).join('\n')}`,
@@ -713,7 +713,7 @@ IMPORTANT:
   ): Promise<string> {
     try {
       const response = await this.openaiClient.responses.create({
-        model: 'gpt-5-mini-2025-08-07',
+        model: 'gpt-5-nano-2025-08-07',
         input: `${textToSearch}`,
         instructions: `You will receive a text. Your task is to filter the text following the rule below:
 
@@ -723,7 +723,7 @@ IMPORTANT:
         
         Aside from the numerical references, you MUST NOT modify anything from the text.`,
         reasoning: {
-          effort: 'minimal'
+          effort: 'high'
         },
       });
 
@@ -869,7 +869,7 @@ IMPORTANT:
     });
 
     const response = await this.openaiClient.responses.parse({
-      model: 'gpt-5-mini-2025-08-07',
+      model: 'gpt-5-nano-2025-08-07',
       instructions: `Filter text chunks to extract the shortest text snippet possible that answers the user query (no longer than one sentence).
         
       TASK: Find the most relevant text snippet
@@ -893,7 +893,7 @@ IMPORTANT:
         format: zodTextFormat(responseFormat, "filter_text")
       },
       reasoning: {
-        effort: 'minimal'
+        effort: 'low'
       }
     })
 
@@ -926,7 +926,7 @@ IMPORTANT:
         `,
         input: parsedResult?.text || '',
         reasoning: {
-          effort: 'minimal'
+          effort: 'low'
         },
       })
     }
@@ -1472,7 +1472,7 @@ IMPORTANT:
     });
 
     const response = await this.openaiClient.responses.parse({
-      model: 'gpt-5-mini-2025-08-07',
+      model: 'gpt-5-nano-2025-08-07',
       input: `User query: ${query}\n\nMessages: ${messages.map(message => `${message.role}: ${message.content}`).join('\n')}\n\n${conversationSummaryText}\n\nFiles' structure summaries: ${fileContents.map(file => `${file.originalName}: ${file.summary}`).join('\n')}`,
       instructions: `Follow these tasks in order:
     
@@ -1546,7 +1546,7 @@ IMPORTANT:
         format: zodTextFormat(questionsFormat, 'questions'),
       },
       reasoning: {
-        effort: "minimal"
+        effort: "low"
       }
     })
 
