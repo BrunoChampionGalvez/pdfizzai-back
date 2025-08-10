@@ -345,21 +345,25 @@ export class AIService {
 
       NOTE 1: Each reference should follow it's corresponding statement. Don't return all the references at the end.
 
-      NOTE 2: The references' text should be exactly as you received it in the context. DO NOT add or remove any characters. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, and ANY character that was in the original chunk text, including numbers as well.
+      NOTE 2: NEVER provide references longer than one sentence, the references' text must ALWAYS be one sentence long. If you need to provide multiple sentences, provide multiple references, each one in a different opening and closing reference tags ([REF] and [/REF]).
 
-      NOTE 3: NEVER provide references longer than one sentence, the references' text must ALWAYS be one sentence long. If you need to provide multiple sentences, provide multiple references, each one in a different opening and closing reference tags ([REF] and [/REF]).
+      NOTE 3: It is EXTREMELY IMPORTANT that when providing the text of the references, you NEVER add or remove any characters from it, of any type. You MUST select one sentence from the context provided, as stated in NOTE 3, but you should NEVER add or remove any characters from that sentence you have selected as text of the reference. The references' text should be exactly as you received it in the context. DO NOT add or remove any characters. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, and ANY character that was in the original chunk text, including numbers as well.
 
-      NOTE 4: It is EXTREMELY IMPORTANT that when providing the text of the references, you NEVER add or remove any characters from it, of any type. You MUST select one sentence from the context provided, as stated in NOTE 3, but you should NEVER add or remove any characters from that sentence you have selected as text of the reference.
+      NOTE 4: When providing each reference, ALWAYS open and close the reference tags ([REF] and [/REF]).
 
-      NOTE 5: When providing each reference, ALWAYS open and close the reference tags ([REF] and [/REF]).
+      NOTE 5: When responding, provide markdown formatting elements to improve the readability of the response, organizing the response in sections. For example, headings, subheadings, font bold, italic, bullet points, and numbered lists. Use headings with #, ##, ###; bold with **; italic with *; bullet points with -; and numbered lists with 1., 2., 3., etc.
 
-      NOTE 6: When responding, provide markdown formatting elements to improve the readability of the response, organizing the response in sections. For example, headings, subheadings, font bold, italic, bullet points, and numbered lists. Use headings with #, ##, ###; bold with **; italic with *; bullet points with -; and numbered lists with 1., 2., 3., etc.
+      NOTE 6: Don't provide the same reference multiple times, only once.
 
-      NOTE 7: Don't provide the same reference multiple times, only once.
+      NOTE 7: Respond with information relevant to the user query. On that note, you don't have to use all the information of the context provided to you.
 
-      NOTE 8: Respond with information relevant to the user query. On that note, you don't have to return all the information of the context provided to you.
+      NOTE 8: NEVER repeat the exact same text from the references' text in the statements you provide.
 
-      NOTE 9: Don't repeat the exact same text from the references' text in the statements you provide.
+      NOTE 9: NEVER ask the user to provide information. What you can do if you need more information or the information in the context provided to you is not enough is tell the user "Try to rephrase your question in a more specific way, so I can provide you with more accurate information." or the corresponding translated version in the user's language.
+
+      NOTE 10: NEVER ask the user further questions about how he would like your response. Just use the context provided and the user query to answer the question. For example, dont ask him "Do you prefer a section-by-section detailed analysis or a one long paragraph summary?".
+
+      NOTE 11: When your response is suitable to be answered in sections (with their corresponding headings or subheadings), ALWAYS do it using markdown formatting elements.
     `;
 
     return prompt;
