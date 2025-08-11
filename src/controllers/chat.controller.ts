@@ -36,7 +36,7 @@ export class ChatController {
     // Initial validation: verify the session exists before proceeding
     try {
       // Verify that the session exists and belongs to the user
-      const session = await this.chatService.findSessionById(sessionId, req.user.id);
+      const session = await this.chatService.findSessionById(sessionId, req.user.userId);
 
       // Additional verification to ensure we have a valid session ID
       if (!session || !session.id) {
@@ -162,7 +162,7 @@ export class ChatController {
     @Param('messageId') messageId: string,
   ): Promise<string> {
     console.log(
-      `Searching reference again for user ${req.user.id} with text: "${body.textToSearch}"`,
+      `Searching reference again for user ${req.user.userId} with text: "${body.textToSearch}"`,
     );
     try {
       const result = await this.chatService.loadReferenceAgain(
@@ -177,7 +177,7 @@ export class ChatController {
       return result;
     } catch (error: unknown) {
       console.error(
-        `Error searching reference again for user ${req.user.id}:`,
+        `Error searching reference again for user ${req.user.userId}:`,
         error,
       );
       throw error; // Let the global error handler catch this
@@ -187,15 +187,15 @@ export class ChatController {
   @Get('reference-path/:id')
   async getReferencePath(
     @Param('id') id: string,
-    @Req() req: { user: { id: string } },
+    @Req() req: Request & { user: { userId: string } },
   ): Promise<{ path: string }> {
     try {
       console.log(
-        `Getting reference path for file ${id}, for user ${req.user.id}`,
+        `Getting reference path for file ${id}, for user ${req.user.userId}`,
       );
       const path = await this.chatService.getReferencePathById(
         { id }, // Wrap the id in an object to match the expected parameter type
-        req.user.id,
+        req.user.userId,
       );
       return { path };
     } catch (e: unknown) {

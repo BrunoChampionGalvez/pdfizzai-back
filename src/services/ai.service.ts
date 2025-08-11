@@ -269,11 +269,11 @@ export class AIService {
       );
 
       const response = await this.openaiClient.responses.create({
-        model: 'gpt-5-nano-2025-08-07',
+        model: 'gpt-5-mini-2025-08-07',
         instructions: systemPrompt,
         input: inputContent,
         reasoning: {
-          effort: 'medium'
+          effort: 'low'
         },
         stream: true,
       });
@@ -320,9 +320,9 @@ export class AIService {
       
       RULES:
       - Prioritize the provided context over your general knowledge when responding to the user query.
-      - Every statement MUST have a reference
+      - Every statement that you extracted from the context MUST have a reference, that should ALWAYS be enclosed in the [REF] and [/REF] tags, as we will later discuss.
       - Don't repeat the information that you provide in the references, in your statements
-      - If no relevant info found, respond the following (translate it if the user talks to you in another language): "The requested information was not found in the file context. Please try again providing more context."
+      - If no relevant info found to answer the user query appropriately, respond the following (translate it if the user talks to you in another language): "The requested information was not found in the chat context. Please try again by adding more files to the chat context.". NEVER ask the user to provide information, excerpts or extracts.
       - Match user's language but keep reference text in original language
       
       REFERENCE FORMAT (required for each statement):
@@ -334,7 +334,7 @@ export class AIService {
       }
       [/REF]
       
-      Example:
+      Example 1:
       Mitochondria produce ATP through oxidative phosphorylation.
       [REF]
       {
@@ -343,42 +343,53 @@ export class AIService {
       }
       [/REF]
 
+      Example 2:
+      The human body has 206 bones.
+      [REF]
+      {
+        "id": "1004",
+        "text": "The human body has 206 bones, including the 204 bones of the body and the 2 spines."
+      }
+      [/REF]
+
       NOTE 1: Each reference should follow it's corresponding statement. Don't return all the references at the end.
 
-      NOTE 2: NEVER provide references longer than one sentence, the references' text must ALWAYS be one sentence long. If you need to provide multiple sentences, provide multiple references, each one in a different opening and closing reference tags ([REF] and [/REF]).
+      NOTE 2: NEVER provide references longer than one sentence, the references' text must ALWAYS be one sentence long. If you need to provide multiple sentences, provide multiple references, each one with their own different opening and closing reference tags ([REF] and [/REF]).
 
-      NOTE 3: It is EXTREMELY IMPORTANT that when providing the text of the references, you NEVER add or remove any characters from it, of any type. You MUST select one sentence from the context provided, as stated in NOTE 3, but you should NEVER add or remove any characters from that sentence you have selected as text of the reference. The references' text should be exactly as you received it in the context. DO NOT add or remove any characters. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, and ANY character that was in the original chunk text, including numbers as well.
+      NOTE 3: It is EXTREMELY IMPORTANT that when providing the text of the references, you NEVER add or remove any characters from it, of any type. You MUST select one sentence from the context provided, as stated in NOTE 3, but you should NEVER add or remove any characters from that sentence you have selected as text of the reference. The references' text should be exactly as you received it in the context.
 
-      NOTE 4: When providing each reference, ALWAYS open and close the reference tags ([REF] and [/REF]).
+      NOTE 4: When providing each reference, ALWAYS open and close the reference tags ([REF] and [/REF]). NEVER provide a reference with only an opening or only a closing tag, or neither of them. Both MUST ALWAYS be provided.
 
-      NOTE 5: When responding, provide markdown formatting elements to improve the readability of the response, organizing the response in sections. For example, headings, subheadings, font bold, italic, bullet points, and numbered lists. Use headings with #, ##, ###; bold with **; italic with *; bullet points with -; and numbered lists with 1., 2., 3., etc.
+      NOTE 5: When your response is suitable to be answered in sections (with their corresponding headings or subheadings), ALWAYS do it using markdown formatting elements. For example, headings, subheadings, font bold, italic, bullet points, and numbered lists. Use headings with #, ##, ###; bold with **; italic with *; bullet points with -; and numbered lists with 1., 2., 3., etc.
 
       NOTE 6: Don't provide the same reference multiple times, only once.
 
       NOTE 7: Respond with information relevant to the user query. On that note, you don't have to use all the information of the context provided to you.
 
-      NOTE 8: NEVER repeat the exact same text from the references' text in the statements you provide.
+      NOTE 8: NEVER repeat the exact same text from the references' text in the statements you provide, paraphrase it if necessary.
 
-      NOTE 9: NEVER ask the user to provide information. What you can do if you need more information or the information in the context provided to you is not enough is tell the user in the language he speaks to you "Try to rephrase your question in a more specific way, so I can provide you with more accurate information.".
+      NOTE 9: NEVER offer the user to generate tables.
 
       NOTE 10: NEVER ask the user further questions about how he would like your response. Just use the context provided and the user query to answer the question. For example, dont ask him "Do you prefer a section-by-section detailed analysis or a one long paragraph summary?".
 
-      NOTE 11: When your response is suitable to be answered in sections (with their corresponding headings or subheadings), ALWAYS do it using markdown formatting elements.
+      NOTE 11: ALWAYS be enthusiastic when talking to the user. For example, when greeting him, say something like "Hi! What can I help you with?" or "Hello! How can I assist you today?". Or when the user is asking for help, say something like "I'm here to help you. What do you need?" or "I'm happy to help you with that!". As the rest of your statements, provide it in the language the user talkes to you.
+
+      NOTE 12: If the text of a reference ends in a ',' or a ';' character, DON'T interchange it for a '.' character, and viceversa.
+
+      NOTE 13: Don't provide the ids of the files as part of the statements, only use them as part of the references.
     `;
 
     return prompt;
   }
 
   async userQueryCategorizer(query: string): Promise<{
-    specific: string[],
-    generic: string[],
+    queries: string[],
   }> {
     try {
       console.log('Input query for categorization:', query);
 
       const schema = z.object({
-        specific: z.array(z.string()),
-        generic: z.array(z.string()),
+        queries: z.array(z.string()),
       });
 
       const response = await this.openaiClient.responses.parse({
@@ -388,63 +399,16 @@ export class AIService {
           format: zodTextFormat(schema, "event"),
         },
         instructions: `
-You are a query categorizer. Your task is to:
+You are a query evaluator and separator. Your task is to:
 
-1. Take the EXACT user query as provided
-2. If it contains multiple distinct questions, break it down into atomic sub-queries
-3. Categorize each query/sub-query as "specific" or "generic"
-4. DO NOT generate new questions - only work with what the user actually asked
-
-CATEGORIZATION RULES:
-
-SPECIFIC queries:
-- Ask for precise facts, numbers, definitions, or single concepts
-- Can be answered with 1-2 sentences from a document
-- Work well with semantic search
-
-GENERIC queries:
-- Ask for summaries, overviews, or broad explanations
-- Require synthesis of multiple concepts
-- Need comprehensive responses
-
-EXAMPLES:
-
-EXAMPLE 1
-Input: "What is the sample size and what were the main findings?"
-Output:
-{
-  "specific": ["What is the sample size?"],
-  "generic": ["What were the main findings?"]
-}
-
-EXAMPLE 2
-Input: "How many participants were there?"
-Output:
-{
-  "specific": ["How many participants were there?"],
-  "generic": []
-}
-
-EXAMPLE 3
-Input: "Summarize this document"
-Output:
-{
-  "specific": [],
-  "generic": ["Summarize this document"]
-}
-
-EXAMPLE 4
-Input: "provide a detailed analysis of this file"
-Output:
-{
-  "specific": [],
-  "generic": ["provide a detailed analysis of this file"]
-}
+1. Take the user query as provided
+2. If it contains multiple distinct questions, break it down into atomic sub-queries. For example, if the user asks, "What is the sample size and what were the main findings?", break it down into "What is the sample size?" and "What were the main findings?"
+3. If it contains a single question, return a JSON with a single element in the queries array. For example, if the user asks, "What is the sample size?", return a JSON with a single element in the queries array, like this: { "queries": ["What is the sample size?"] }
+3. DO NOT generate new questions - only work with what the user actually asked
 
 IMPORTANT:
-- Always return valid JSON with both "specific" and "generic" arrays
-- If unsure, categorize as "generic"
-- Single queries should go in one category only`,
+- Always return a valid JSON with the queries string array
+- If the query is a single question, return a JSON with a single element in the queries array`,
       reasoning: {
         effort: 'minimal'
       }
@@ -460,30 +424,26 @@ IMPORTANT:
         console.error('JSON parsing failed:', parseError.message);
         // Fallback: treat as generic query
         return {
-          specific: [],
-          generic: [query],
+          queries: [query],
         };
       }
 
       // Validate response structure
-      if (!parsedResponse.specific || !parsedResponse.generic) {
+      if (!parsedResponse.queries || parsedResponse.queries.length === 0) {  
         console.warn('Invalid response structure, using fallback');
         return {
-          specific: [],
-          generic: [query], // Fallback: treat as generic if structure is invalid
+          queries: [query], // Fallback: treat as generic if structure is invalid
         };
       }
 
-      const specificLength = parsedResponse.specific.length;
-      const genericLength = parsedResponse.generic.length;
-      console.log(`Categorization result - Specific: ${specificLength}, Generic: ${genericLength}`);
+      const queriesLength = parsedResponse.queries.length;
+      console.log(`Categorization result - Queries: ${queriesLength}`);
 
       // If both arrays are empty, fallback to treating the original query as generic
-      if (specificLength === 0 && genericLength === 0) {
-        console.warn('Both arrays empty, using fallback categorization');
+      if (queriesLength === 0) {
+        console.warn('queries array empty, using fallback categorization');
         return {
-          specific: [],
-          generic: [query],
+          queries: [query],
         };
       }
 
@@ -493,8 +453,7 @@ IMPORTANT:
       console.error('Query that caused error:', query);
       // Fallback: treat as generic query
       return {
-        specific: [],
-        generic: [query],
+        queries: [query],
       };
     }
   }
@@ -686,6 +645,8 @@ IMPORTANT:
 3. If you find the text snippet and it is not split, but contains minor variations (e.g., different punctuation, different characters, letters, numbers, or special characters), return it exactly as it appears in the Files context. Even if the wording doesn't make sense, for example, joined words, extra characters or spaces, missing characters or spaces, return it exactly as it appears in the Files context, not in the text snippet.
 
 4. If you do not find the text snippet in the Files context (neither whole, with minor variations, or split), then you must return the text snippet exactly as you received it.
+
+5. Never return more than one sentence.
 `,
         reasoning: {
           effort: 'minimal'
@@ -694,8 +655,8 @@ IMPORTANT:
 
       let result = response.output_text;
 
-      const result2 = await this.filterReferencesNumericalRef(result);
-      return result2 ? result2 : textToSearch; // Return the original text if no result found
+      //const result2 = await this.filterReferencesNumericalRef(result);
+      return result ? result : textToSearch; // Return the original text if no result found
     } catch (error) {
       console.error(
         `Error searching reference again: ${
@@ -868,73 +829,122 @@ IMPORTANT:
       text: z.string(),
     });
 
-    const response = await this.openaiClient.responses.parse({
-      model: 'gpt-5-nano-2025-08-07',
-      instructions: `Filter text chunks to extract the shortest text snippet possible that answers the user query (no longer than one sentence).
-        
-      TASK: Find the most relevant text snippet
-      - Extract the single most relevant text snippet that directly answers the query from the chunks from a file that you receive (no longer than one sentence).
-      - DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, and ANY character that was in the original chunk text, including numbers as well.
+    // OPENAI
 
-      INPUT: Query + array of {id, name, text} objects
-      OUTPUT: JSON with fileId, name, and the extracted text snippet
+    // const response = await this.openaiClient.responses.parse({
+    //   model: 'gpt-5-nano-2025-08-07',
+    //   instructions: `Filter text chunks to extract the shortest text snippet possible that answers the user query (no longer than one sentence).
         
-      EXAMPLE OUTPUT:
-      {"fileId": "123", "name": "Example File", "text": "This is the extracted text snippet."}
-      
-      NOTE 1: If the text is split in two parts by information that was extracted from tables or graphs, provide only the longest coherent part of the two.
-        
-      NOTE 2: The extracted text snippet should be in the same language as the text chunks.
-      
-      NOTE 3: If the text doesn't contain any relevant information to answer the query, return empty strings for fileId, name, and text.`,
+    //   TASK: Find the most relevant text snippet
+    //   - Extract the single most relevant text snippet that directly answers the query from the chunks from a file that you receive (no longer than one sentence).
+    //   - DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, and ANY character that was in the original chunk text, including numbers as well.
 
-      input: `Query: ${question}\n\nChunks: \n${searchDataStr}`,
-      text: {
-        format: zodTextFormat(responseFormat, "filter_text")
-      },
-      reasoning: {
-        effort: 'minimal'
+    //   INPUT: Query + array of {id, name, text} objects
+    //   OUTPUT: JSON with fileId, name, and the extracted text snippet
+        
+    //   EXAMPLE OUTPUT:
+    //   {"fileId": "123", "name": "Example File", "text": "This is the extracted text snippet."}
+      
+    //   NOTE 1: If the text is split in two parts by information that was extracted from tables or graphs, provide only the longest coherent part of the two.
+        
+    //   NOTE 2: The extracted text snippet should be in the same language as the text chunks.
+      
+    //   NOTE 3: If the text doesn't contain any relevant information to answer the query, return empty strings for fileId, name, and text.`,
+
+    //   input: `Query: ${question}\n\nChunks: \n${searchDataStr}`,
+    //   text: {
+    //     format: zodTextFormat(responseFormat, "filter_text")
+    //   },
+    //   reasoning: {
+    //     effort: 'minimal'
+    //   }
+    // })
+
+    // const parsedResult = response.output_parsed
+
+    // let response2
+    // if (parsedResult?.text) {
+    //   response2 = await this.openaiClient.responses.create({
+    //     model: 'gpt-5-nano-2025-08-07',
+    //     instructions: `Filter the text following these guidelines:
+
+    //     1. If the text has numerical references like [1], [2], [3] or 1, 2, 3, follow the following steps:
+    //       I. Split the text by the numerical references. These numerical references are detectable by seeing if the numbers present have semantical coherence with the rest of the text in which they are in. If they are random numbers inserted that don't have semantical coherence with the rest of the text, it is because they are numerical references. If, the numbers fit semantically within the text they are in, return the whole text.
+    //       II. Return only the longest part of the parts that were divided by these numerical references.
+    //       III. If the text doesn't have numerical references, return the whole text.
+    //       IV. Examples of texts with numerical references:
+    //         a. The mitochondria is the power house of the cell 1.
+    //         b. We drew the data from the records of the John Hopkins Hospital 3, 4, the participants were middle aged adult smokers 3.
+    //         c. Paliperidone is a second generation antipsychotic 2, usually applied by injectionss.
+    //         d. The mitochondria is the power house of the cell [1].
+    //         e. We drew the data from the records of the John Hopkins Hospital [3], [4], the participants were middle aged adult smokers [3].
+    //       V. Examples of texts without numerical references:
+    //         a. There were 237 participants in the study, 120 of which were men, and 117 women.
+    //         b. The participants in the experimental group received between 2 and 3 doses of the medication, same as the placebo group.
+    //         c. The psychological test, comprised of 87 questions, evaluates different aspects of emotional intelligence.
+
+    //     2. If the text contains the [START_PAGE] and [END_PAGE] markers in the middle, return the text with the markers, don't remove them.
+
+    //     NOTE: DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, ", ', and ANY character that was in the original chunk text.
+    //     `,
+    //     input: parsedResult?.text || '',
+    //     reasoning: {
+    //       effort: 'minimal'
+    //     },
+    //   })
+    // }
+
+    // GEMINI
+
+    const response = await this.gemini.models.generateContent({
+      model: this.geminiModels.flash,
+      contents: `Query: ${question}\n\nChunks: \n${searchDataStr}`,
+      config: {
+        systemInstruction: `Filter text chunks to extract the shortest text snippet possible that answers the user query (no longer than one sentence).
+        
+    TASK: Find the most relevant text snippet
+    - Extract the single most relevant text snippet that directly answers the query from the chunks from a file that you receive (no longer than one sentence).
+    - DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks.
+
+    INPUT: Query + array of {id, name, text} objects
+    OUTPUT: JSON with fileId, name, and the extracted text snippet
+        
+    EXAMPLE OUTPUT:
+    {"fileId": "123", "name": "Example File", "text": "This is the extracted text snippet."}
+      
+    NOTE 1: If the text is split in two parts by information that was extracted from tables or graphs, provide the whole text, with the text in the middle as well.
+        
+    NOTE 2: The extracted text snippet should be in the same language as the text chunks.
+      
+    NOTE 3: If the text doesn't contain any relevant information to answer the query, return empty strings for fileId, name, and text.
+    
+    NOTE 4: If the text contains the [START_PAGE] and [END_PAGE] markers in the MIDDLE of it, return the whole text, with the markers in the middle.
+    
+    NOTE 5: If the text ends in a ',' or a ';' character, DON'T interchange it for a '.' character, and viceversa.`,
+          temperature: 0.2,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              fileId: { type: Type.STRING },
+              name: { type: Type.STRING },
+              text: { type: Type.STRING },
+            },
+          }
       }
     })
 
-    const parsedResult = response.output_parsed
-
-    let response2
-    if (parsedResult?.text) {
-      response2 = await this.openaiClient.responses.create({
-        model: 'gpt-5-nano-2025-08-07',
-        instructions: `Filter the text following these guidelines:
-
-        1. If the text has numerical references like [1], [2], [3] or 1, 2, 3, follow the following steps:
-          I. Split the text by the numerical references. These numerical references are detectable by seeing if the numbers present have semantical coherence with the rest of the text in which they are in. If they are random numbers inserted that don't have semantical coherence with the rest of the text, it is because they are numerical references. If, the numbers fit semantically within the text they are in, return the whole text.
-          II. Return only the longest part of the parts that were divided by these numerical references.
-          III. If the text doesn't have numerical references, return the whole text.
-          IV. Examples of texts with numerical references:
-            a. The mitochondria is the power house of the cell 1.
-            b. We drew the data from the records of the John Hopkins Hospital 3, 4, the participants were middle aged adult smokers 3.
-            c. Paliperidone is a second generation antipsychotic 2, usually applied by injectionss.
-            d. The mitochondria is the power house of the cell [1].
-            e. We drew the data from the records of the John Hopkins Hospital [3], [4], the participants were middle aged adult smokers [3].
-          V. Examples of texts without numerical references:
-            a. There were 237 participants in the study, 120 of which were men, and 117 women.
-            b. The participants in the experimental group received between 2 and 3 doses of the medication, same as the placebo group.
-            c. The psychological test, comprised of 87 questions, evaluates different aspects of emotional intelligence.
-
-        2. If the text contains the [START_PAGE] and [END_PAGE] markers in the middle, return the text with the markers, don't remove them.
-
-        NOTE: DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, ", ', and ANY character that was in the original chunk text.
-        `,
-        input: parsedResult?.text || '',
-        reasoning: {
-          effort: 'minimal'
-        },
-      })
+    const parsedResult = JSON.parse(response.text) || {
+      fileId: '',
+      name: '',
+      text: '',
     }
-    const result = {
-      fileId: parsedResult ? parsedResult.fileId : '',
-      name: parsedResult ? parsedResult.name : '',
-      text: response2?.output_text || parsedResult?.text || '',
-    }
+
+      const result = {
+        fileId: parsedResult ? parsedResult.fileId : '',
+        name: parsedResult ? parsedResult.name : '',
+        text: parsedResult?.text || '',
+      }
 
     return result || { fileId: '', name: '', text: '' };
   }
@@ -988,7 +998,6 @@ IMPORTANT:
     return result ? result.split('\n').filter(Boolean) : [];
   }
 
-  // Optimization: Smart task decomposition - intelligently choose processing strategy
   async smartProcessingStrategy(
     files: Array<{ fileId: string; name: string; questions: string[]; description: string; summary?: string }>,
     userQuery: string,
@@ -1006,25 +1015,8 @@ IMPORTANT:
     rawExtractedContent: RawExtractedContent[];
   }> {
     try {
-      // Smart decomposition: analyze query and file characteristics
-      const queryComplexity = this.analyzeQueryComplexity(userQuery);
-      const totalFiles = files.length;
-      const avgQuestionsPerFile = files.reduce((sum, f) => sum + f.questions.length, 0) / totalFiles;
-      
-      // Choose optimal strategy based on analysis
-      if (totalFiles <= 2 && queryComplexity === 'simple') {
-        // Sequential processing for small, simple tasks
-        return this.sequentialProcessFiles(files, userQuery, userId, sessionId, previousUserQuery, previousModelResponse);
-      } else if (totalFiles <= 5 && avgQuestionsPerFile <= 10) {
-        // Parallel processing for medium tasks
-        return this.batchProcessFiles(files, userQuery, userId, sessionId, previousUserQuery, previousModelResponse);
+      return this.batchProcessFiles(files, userQuery, userId, sessionId, previousUserQuery, previousModelResponse);
 
-      } else {
-        // Hybrid approach for complex tasks
-        return this.hybridProcessFiles(files, userQuery, userId, sessionId, previousUserQuery, previousModelResponse);
-
-
-      }
     } catch (error) {
       console.error('Error in smartProcessingStrategy:', error);
       return this.batchProcessFiles(files, userQuery, userId, sessionId, previousUserQuery, previousModelResponse); // Fallback
@@ -1130,7 +1122,6 @@ IMPORTANT:
 
     for (const file of files) {
       const fileResults = await this.processQuestionsForQuery(
-        file.questions,
         file.description,
         userQuery,
         userId,
@@ -1226,7 +1217,6 @@ IMPORTANT:
         const batch = files.slice(i, i + batchSize);
         const batchPromises = batch.map(file => 
           this.processQuestionsForQuery(
-            file.questions,
             file.description,
             userQuery,
             userId,
@@ -1259,7 +1249,6 @@ IMPORTANT:
 
   // Process questions for query - uses questions for semantic search to handle generic queries
   async processQuestionsForQuery(
-    questions: string[],
     description: string,
     userQuery: string,
     userId: string,
@@ -1295,7 +1284,7 @@ IMPORTANT:
 
       const response = await this.gemini.models.generateContent({
         model: this.geminiModels.flash,
-        contents: `User query: ${userQuery}\n\nFile description: ${description}\n\nExisting questions: ${questions.join('\n')}${relevantContent ? `\n\nFile summary: ${relevantContent}` : ''}\n\nPrevious user query: ${previousUserQuery || 'No previous user query exists'}\n\nPrevious model response: ${previousModelResponse || 'No previous model response exists'}`,
+        contents: `User query: ${userQuery}\n\nFile description: ${description}${relevantContent ? `\n\nFile summary: ${relevantContent}` : ''}\n\nPrevious user query: ${previousUserQuery || 'No previous user query exists'}\n\nPrevious model response: ${previousModelResponse || 'No previous model response exists'}`,
         config:  {
           systemInstruction: `You are an intelligent question processor. Analyze the user query against existing questions and file summary to determine the best approach.
           
@@ -1472,7 +1461,7 @@ IMPORTANT:
     });
 
     const response = await this.openaiClient.responses.parse({
-      model: 'gpt-5-nano-2025-08-07',
+      model: 'gpt-5-mini-2025-08-07',
       input: `User query: ${query}\n\nMessages: ${messages.map(message => `${message.role}: ${message.content}`).join('\n')}\n\n${conversationSummaryText}\n\nFiles' structure summaries: ${fileContents.map(file => `${file.originalName}: ${file.summary}`).join('\n')}`,
       instructions: `Follow these tasks in order:
     
@@ -1485,6 +1474,8 @@ IMPORTANT:
       4. Return the questions in case you generated new ones, or the user query in case you didn't, in a specific output JSON format.
 
       These questions, when responded, should cover all the possible ways the user query can be answered, based on the structure of the files. For example, if the user asks for a summary of a research paper, you must generate very specific questions that, when answered, will help a later reader understand all the main sections of the file, like the different aspects of the methodology, results, limitations, recommendations, conclusions, etc. In other words, you should crumble the user query into smaller questions that can be answered with very specific responses, not with  broad responses, that precisely ask about specific things, not general ones.
+
+      Generate questions that can't be divided into smaller questions. For example, you must not return a question like "What are the objectives of the study and what was the population studied?". You must return otherwise two different questions as two different elements of the array, the first one "What are the objectives of the study?", and the second one "What was the population studied?".
       
       OUTPUT JSON FORMAT:
       {
@@ -1533,15 +1524,15 @@ IMPORTANT:
 
       As you can see from the examples, the questions should be as specific as possible, not asking broad questions like "provide a summary of the document", "what are the key points of the document?", "what was the methodology of the study?", "what are the main takeaways of the file?".
         
-      NOTE 1: Use your knowledge base to understand what questions can be generated from the user query. For example, if the user query is "what tests were used in the study?", you know that there are usually multiple types of tests used in a study: statistical, psychological, medical, etc. You should generate questions to retrieve information of all those types of tests from the vector store. In other words, you should generate the questions to cover everything that can be associated with the user query, based on the structure of the files. If the user asks for a summary, the key points, a detailed summary, or anything that should cover the whole files, yous should generate questions that cover ALL the main sections of the files.
+      NOTE 1: Use your knowledge base to understand what questions can be generated from the user query. For example, if the user query is "what tests were used in the study?", you know that there are usually multiple types of tests used in a study: statistical, psychological, medical, etc. You should generate questions to retrieve information of all those types of tests from the vector store. In other words, you should generate the questions to cover everything that can be associated with the user query, based on the structure of the files. If the user asks for a summary, the key points, a detailed summary, or anything that should cover the whole files, you should generate questions that cover ALL the main sections of the files.
       
-      NOTE 2: Make the questions as atomic as possible. For example, if the user query is "what tests were used in the study?", you should generate questions like "what statistical tests were used in the study?", "what tests did they use for measuring [VARIABLE STUDIED]?", "what was the sample size?", etc.
+      NOTE 2: The questions should be in the same language as the files structure summaries.
       
-      NOTE 3: The questions should be in the same language as the user query.
+      NOTE 3: Don't include the name of the files in the questions.
       
-      NOTE 4: Don't include the name of the files in the questions.
+      NOTE 4: If the user asks for a summary of each of the files provided, generate the necessary questions that when responded can answer the user query in a complete way.
       
-      NOTE 5: Only one thing should be asked with each question, not multiple things. For example, 'What are the main results, conclusions, or recommendations provided?' this question should be divided in "What are the main results?", "What did the authors recommend?", "What were the main conclusions?".`,
+      NOTE 5: You can generate a minimum of 1 question and a maximum of 20 questions.`,
       text: {
         format: zodTextFormat(questionsFormat, 'questions'),
       },

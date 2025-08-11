@@ -260,14 +260,13 @@ export class ChatService {
     // Optimization 1: Parallel processing and batching
     const queries = await this.aiService.userQueryCategorizer(content);
     let questions: string[] = [];
-    const specificQueries = queries.specific;
-    const genericQueries = queries.generic;
+    const queriesArray = queries.queries;
   
     // Optimized: Batch specific queries processing
-    questions.push(...specificQueries)
+    questions.push(...queriesArray)
     
     // Parallel semantic searches for specific queries
-    const specificSearchPromises = specificQueries.map(query => 
+    const specificSearchPromises = queriesArray.map(query => 
       this.aiService.semanticSearch(query, userId, fileContents.map(fc => fc.id))
     )
     
@@ -300,7 +299,7 @@ export class ChatService {
     const allRawContentPromises: Promise<RawExtractedContent[]>[] = []
     
     // Batch all question generation requests first
-    const questionGenerationPromises = genericQueries.map(query => 
+    const questionGenerationPromises = queriesArray.map(query => 
       this.aiService.generateQuestionsFromQuery(query, messages.slice(-5), fileContents)
     )
     
@@ -311,8 +310,8 @@ export class ChatService {
     const allSearchPromises: Promise<any>[] = []
     const searchMetadata: { query: string; question: string; file: any; queryIndex: number }[] = []
     
-    for (let i = 0; i < genericQueries.length; i++) {
-      const query = genericQueries[i]
+    for (let i = 0; i < queriesArray.length; i++) {
+      const query = queriesArray[i]
       const questions = allQuestionResults[i]
       
       if (questions.length === 0) continue
