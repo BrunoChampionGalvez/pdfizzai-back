@@ -1,5 +1,4 @@
 import * as fs from 'fs';
-import { pathToFileURL } from 'url';
 
 // Dynamic import for pdfjs-dist to handle ES module in CommonJS environment
 let pdfjsLib: any;
@@ -7,9 +6,18 @@ let pdfjsLib: any;
 async function initPdfJs() {
   if (!pdfjsLib) {
     pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
-    // Configure PDF.js for Node.js environment with proper file:// URL
-    const workerPath = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
-    pdfjsLib.GlobalWorkerOptions.workerSrc = pathToFileURL(workerPath).toString();
+    // Configure PDF.js for Node.js environment
+    // Use a relative path approach that works in both local and deployed environments
+    try {
+      // Try to import the worker module to ensure it exists
+      await import('pdfjs-dist/legacy/build/pdf.worker.mjs');
+      // Set worker source to the module path
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist/legacy/build/pdf.worker.mjs';
+    } catch (error) {
+      console.warn('Could not load PDF worker, PDF processing may be slower:', error);
+      // Fallback: disable worker
+      pdfjsLib.GlobalWorkerOptions.workerSrc = null;
+    }
   }
   return pdfjsLib;
 }
