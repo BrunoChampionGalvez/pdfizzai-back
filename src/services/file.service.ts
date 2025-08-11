@@ -13,6 +13,7 @@ import { ChatSession, Folder } from 'src/entities';
 import { Storage } from '@google-cloud/storage';
 import { SubscriptionUsage } from 'src/entities/subscription-usage.entity';
 import { ExtractedContent } from 'src/entities/extracted-content.entity';
+import { extractTextFromPDFBuffer, getPDFPageCount } from '../utils/pdf-text-extractor';
 
 @Injectable()
 export class FileService {
@@ -126,6 +127,7 @@ export class FileService {
     // Create file entity
     const file = this.fileRepository.create({
       originalName: fileData.originalname,
+      filename: fileData.originalname, // Set filename immediately
       storage_path: virtualPath, // Store a virtual path instead of a physical file path
       mime_type: fileData.mimetype,
       size_bytes: fileData.size,
@@ -139,7 +141,34 @@ export class FileService {
     file.google_storage_url = newSig.url;
     file.expires = newSig.expires;*/
 
-    const savedFile = await this.fileRepository.save(file);
+    let savedFile = await this.fileRepository.save(file);
+
+    // If it's a PDF file, extract text immediately
+    if (fileData.mimetype === 'application/pdf') {
+      try {
+        console.log('Extracting text from PDF during upload...');
+        
+        // Extract text from PDF buffer
+        const extractedText = await extractTextFromPDFBuffer(fileData.buffer);
+        const totalPages = await getPDFPageCount(fileData.buffer);
+        
+        console.log(`Extracted ${extractedText.length} characters from ${totalPages} pages`);
+        
+        // Process the extracted text using the existing saveExtractedText logic
+        savedFile = await this.saveExtractedText(
+          savedFile.id,
+          userId,
+          extractedText,
+          totalPages
+        );
+        
+        console.log('PDF text extraction and processing completed during upload');
+      } catch (error) {
+        console.error('Error extracting text from PDF during upload:', error);
+        // Don't throw error - file upload should still succeed even if text extraction fails
+        // The user can try text extraction later if needed
+      }
+    }
 
     return savedFile;
   }

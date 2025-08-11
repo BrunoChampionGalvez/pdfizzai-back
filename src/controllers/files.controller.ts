@@ -92,37 +92,8 @@ export class FileController {
     return { message: 'File deleted successfully' };
   }
 
-  /**
-   * Save extracted text from PDF.js Express
-   */
-  @Post(':id/save-text')
-  async saveExtractedText(
-    @Req() req: Request & { user: any },
-    @Param('id') id: string,
-    @Body () textData: { textByPages: string }
-  ) {
-    try {
-      console.log('Backend: Received text extraction request for file:', id);
-      console.log('Backend: User ID:', req.user.userId);
-      console.log('Backend: Text data length:', textData.textByPages?.length || 0);
-      
-      const result = await this.fileService.saveExtractedText(
-        id,
-        req.user.userId,
-        textData.textByPages
-      );
-      
-      console.log('Backend: Text extraction saved successfully for file:', result.id);
-      return {
-        success: true,
-        paperUpdated: result.id,
-        textLength: textData.textByPages?.length || 0
-      };
-    } catch (error) {
-      console.error('Backend: Error saving extracted text:', error);
-      throw error;
-    }
-  }
+  // Note: Text extraction is now handled automatically during file upload for PDF files
+  // The separate save-text endpoint has been removed as it's no longer needed
 
   @Get()
   async getFiles(
