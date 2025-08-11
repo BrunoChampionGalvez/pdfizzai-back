@@ -42,7 +42,13 @@ export class AuthController {
 
   @Post('logout')
   logout(@Res() res: Response) {
-    res.clearCookie('access_token');
+    // Clear cookie with the same options used when setting it
+    res.clearCookie('access_token', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'strict',
+      ...(process.env.NODE_ENV === 'production' && { domain: process.env.COOKIE_DOMAIN }),
+    });
     return res.json({ message: 'Logged out successfully' });
   }
 
