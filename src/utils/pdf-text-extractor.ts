@@ -7,17 +7,8 @@ async function initPdfJs() {
   if (!pdfjsLib) {
     pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
     // Configure PDF.js for Node.js environment
-    // Use a relative path approach that works in both local and deployed environments
-    try {
-      // Try to import the worker module to ensure it exists
-      await import('pdfjs-dist/legacy/build/pdf.worker.mjs');
-      // Set worker source to the module path
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist/legacy/build/pdf.worker.mjs';
-    } catch (error) {
-      console.warn('Could not load PDF worker, PDF processing may be slower:', error);
-      // Fallback: disable worker
-      pdfjsLib.GlobalWorkerOptions.workerSrc = null;
-    }
+    // Don't set workerSrc - let PDF.js handle it internally
+    // This should work without worker in Node.js environment
   }
   return pdfjsLib;
 }
