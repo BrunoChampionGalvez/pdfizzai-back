@@ -5,7 +5,9 @@ let pdfjsLib: any;
 
 async function initPdfJs() {
   if (!pdfjsLib) {
-    pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    // Use eval() to prevent TypeScript from transpiling dynamic import to require()
+    const pdfjs = await (eval('import("pdfjs-dist/legacy/build/pdf.mjs")') as Promise<any>);
+    pdfjsLib = pdfjs;
     // Configure PDF.js for Node.js environment
     // Don't set workerSrc - let PDF.js handle it internally
     // This should work without worker in Node.js environment
@@ -27,7 +29,7 @@ export async function extractTextFromPDF(filePath: string): Promise<string> {
     const data = new Uint8Array(fs.readFileSync(filePath));
     
     // Load the PDF document
-    const pdf = await pdfjs.getDocument({ data }).promise;
+    const pdf = await pdfjs.getDocument({ data, disableWorker: true }).promise;
     const maxPages = pdf.numPages;
     
     console.log(`PDF has ${maxPages} pages`);
@@ -87,7 +89,7 @@ export async function extractTextFromPDFBuffer(buffer: Buffer): Promise<string> 
     const data = new Uint8Array(buffer);
     
     // Load the PDF document
-    const pdf = await pdfjs.getDocument({ data }).promise;
+    const pdf = await pdfjs.getDocument({ data, disableWorker: true }).promise;
     const maxPages = pdf.numPages;
     
     console.log(`PDF has ${maxPages} pages`);
@@ -117,10 +119,12 @@ export async function extractTextFromPDFBuffer(buffer: Buffer): Promise<string> 
  */
 export async function getPDFPageCount(buffer: Buffer): Promise<number> {
   try {
+    // Ensure pdfjs is initialized using the same dynamic import mechanism
+    const pdfjs = await initPdfJs();
     const data = new Uint8Array(buffer);
-    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    const pdf = await pdfjs.getDocument({ data, disableWorker: true }).promise;
     return pdf.numPages;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error getting PDF page count:', error);
     throw new Error(`Failed to get PDF page count: ${error.message}`);
   }
