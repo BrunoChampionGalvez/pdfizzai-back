@@ -788,7 +788,13 @@ IMPORTANT:
     searchResults: any[],
     question: string,
     userQuery: string,
-  ): Promise<{ fileId: string; name: string; text: string }> {
+  ): Promise<{
+    filteredTexts: {
+      fileId: string,
+      name: string,
+      text: string,
+    }[]
+  }> {
     // Optimization: Simplified input format and more concise instructions
     const searchData = searchResults.map(r => ({
       id: r.fields.fileId,
@@ -799,40 +805,46 @@ IMPORTANT:
     const searchDataStr = `${searchData.map(sd => `Chunk:\nFileId: ${sd.id}\nName: ${sd.name}\nText: ${sd.chunk}`).join('\n\n')}`
 
     const responseFormat = z.object({
-      fileId: z.string(),
-      name: z.string(),
-      text: z.string(),
+      filteredTexts: z.array(z.object({
+        fileId: z.string(),
+        name: z.string(),
+        text: z.string(),
+      })),
     });
 
     // OPENAI
 
     const response = await this.openaiClient.responses.parse({
       model: 'gpt-5-nano-2025-08-07',
-      instructions: `Filter text chunks to extract the shortest text snippet possible that answers the user query (no longer than one sentence).
+      instructions: `Filter text chunks to extract the shortest text snippets possible that answers the user query (no longer than one sentence per snippet).
         
-    TASK: Find the most relevant text snippet
-    - Extract the single most relevant text snippet that directly answers the query from the chunks from a file that you receive (no longer than one sentence).
-    - DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks.
+    TASK: Find the most relevant text snippets
+    - Extract the most relevant text snippets that directly answers the query from the chunks that you receive (no longer than one sentence per snippet).
+
+    - DO NOT add or remove any characters from the text snippets you are returning, compared to the text in the chunks.
 
     INPUT: Query + array of {id, name, text} objects
-    OUTPUT: JSON with fileId, name, and the extracted text snippet
+    OUTPUT: JSON with a filteredTexts property, which is an array of objects with fileId, name, and the extracted text snippet
+
         
     EXAMPLE OUTPUT:
-    {"fileId": "123", "name": "Example File", "text": "This is the extracted text snippet."}
+    {"filteredTexts": [{"fileId": "123", "name": "Example File", "text": "This is the extracted text snippet."}, {"fileId": "456", "name": "Example File 2", "text: "This is the extracted text snippet."}]}
       
-    NOTE 1: If the text is split in two parts by information that was extracted from tables or graphs, provide the part that is the longest.
+    NOTE 1: ONLY provide ONE SENTENCE per filtered text snippet. If you find that multiple consecutive or separate sentences in the chunks answer the query properly, provide them as separate text snippets, each one ONLY being ONE SENTENCE LONG.
         
-    NOTE 2: The extracted text snippet should be in the same language as the text chunks.
+    NOTE 2: The filtered text snippets should be in the same language as the text chunks.
       
-    NOTE 3: If the text doesn't contain any relevant information to answer the query, return empty strings for fileId, name, and text.
+    NOTE 3: If the text chunks don't contain any relevant information to answer the query, return an object with the filteredTexts property being an empty array.
     
-    NOTE 4: If the text contains the [START_PAGE] and [END_PAGE] markers in the MIDDLE of it, return the whole text, with the markers in the middle.
+    NOTE 4: If the texts that you plan on returning contain the [START_PAGE] and [END_PAGE] markers in the MIDDLE of it, return the text with the markers in the middle, don't remove them.
     
-    NOTE 5: If the text ends in a ',' or a ';' character, DON'T interchange it for a '.' character, and viceversa.`,
+    NOTE 5: If the text ends in a ',' or a ';' character, DON'T interchange it for a '.' character, and viceversa.
+    
+    NOTE 6: It is EXTREMELY IMPORTANT that you provide ONLY ONE sentence per text snippet. The most important sentences from the chunks that answer the query properly.`,
 
       input: `Query: ${question}\n\nChunks: \n${searchDataStr}`,
       text: {
-        format: zodTextFormat(responseFormat, "filter_text")
+        format: zodTextFormat(responseFormat, "filter_texts")
       },
       reasoning: {
         effort: 'minimal'
@@ -880,18 +892,12 @@ IMPORTANT:
     // })
 
     const parsedResult = response.output_parsed || {
-      fileId: '',
-      name: '',
-      text: '',
+      filteredTexts: []
     }
 
-      const result = {
-        fileId: parsedResult ? parsedResult.fileId : '',
-        name: parsedResult ? parsedResult.name : '',
-        text: parsedResult?.text || '',
-      }
-
-    return result || { fileId: '', name: '', text: '' };
+    return parsedResult || {
+      filteredTexts: []
+    };
   }
 
   async determineIfQuestionsAnswerQuery(
@@ -943,30 +949,30 @@ IMPORTANT:
     return result ? result.split('\n').filter(Boolean) : [];
   }
 
-  async smartProcessingStrategy(
-    files: Array<{ fileId: string; name: string; questions: string[]; description: string; summary?: string }>,
-    userQuery: string,
-    userId: string,
-    sessionId: string,
-    previousModelResponse?: string,
-    previousUserQuery?: string,
-  ): Promise<{
-    filteredResults: Array<{
-      fileId: string;
-      name: string;
-      content: string;
-      userId: string;
-    }>;
-    rawExtractedContent: RawExtractedContent[];
-  }> {
-    try {
-      return this.batchProcessFiles(files, userQuery, userId, sessionId, previousUserQuery, previousModelResponse);
+  // async smartProcessingStrategy(
+  //   files: Array<{ fileId: string; name: string; questions: string[]; description: string; summary?: string }>,
+  //   userQuery: string,
+  //   userId: string,
+  //   sessionId: string,
+  //   previousModelResponse?: string,
+  //   previousUserQuery?: string,
+  // ): Promise<{
+  //   filteredResults: Array<{
+  //     fileId: string;
+  //     name: string;
+  //     content: string;
+  //     userId: string;
+  //   }>;
+  //   rawExtractedContent: RawExtractedContent[];
+  // }> {
+  //   try {
+  //     return this.batchProcessFiles(files, userQuery, userId, sessionId, previousUserQuery, previousModelResponse);
 
-    } catch (error) {
-      console.error('Error in smartProcessingStrategy:', error);
-      return this.batchProcessFiles(files, userQuery, userId, sessionId, previousUserQuery, previousModelResponse); // Fallback
-    }
-  }
+  //   } catch (error) {
+  //     console.error('Error in smartProcessingStrategy:', error);
+  //     return this.batchProcessFiles(files, userQuery, userId, sessionId, previousUserQuery, previousModelResponse); // Fallback
+  //   }
+  // }
 
   // COST OPTIMIZATION: Uses questions for semantic search to handle generic queries effectively
   /*private async costEfficientSemanticSearch(
@@ -1038,89 +1044,89 @@ IMPORTANT:
     return 'complex';
   }
 
-  private async sequentialProcessFiles(
-    files: Array<{ fileId: string; name: string; questions: string[]; description: string; summary?: string }>,
-    userQuery: string,
-    userId: string,
-    sessionId: string,
-    previousUserQuery?: string,
-    previousModelResponse?: string,
-  ): Promise<{
-    filteredResults: Array<{
-      fileId: string;
-      name: string;
-      content: string;
-      userId: string;
-    }>;
-    rawExtractedContent: RawExtractedContent[];
-  }> {
+  // private async sequentialProcessFiles(
+  //   files: Array<{ fileId: string; name: string; questions: string[]; description: string; summary?: string }>,
+  //   userQuery: string,
+  //   userId: string,
+  //   sessionId: string,
+  //   previousUserQuery?: string,
+  //   previousModelResponse?: string,
+  // ): Promise<{
+  //   filteredResults: Array<{
+  //     fileId: string;
+  //     name: string;
+  //     content: string;
+  //     userId: string;
+  //   }>;
+  //   rawExtractedContent: RawExtractedContent[];
+  // }> {
 
-    const results: Array<{
-      fileId: string;
-      name: string;
-      content: string;
-      userId: string;
-    }> = [];
+  //   const results: Array<{
+  //     fileId: string;
+  //     name: string;
+  //     content: string;
+  //     userId: string;
+  //   }> = [];
 
-    const rawExtractedContent: RawExtractedContent[] = [];
+  //   const rawExtractedContent: RawExtractedContent[] = [];
 
 
-    for (const file of files) {
-      const fileResults = await this.processQuestionsForQuery(
-        file.description,
-        userQuery,
-        userId,
-        file.fileId,
-        sessionId,
-        file.summary,
-        previousUserQuery,
-        previousModelResponse,
-      );
-      rawExtractedContent.push(...fileResults.rawExtractedContent);
-      results.push(...fileResults.filteredResults);
-    }
+  //   for (const file of files) {
+  //     const fileResults = await this.processQuestionsForQuery(
+  //       file.description,
+  //       userQuery,
+  //       userId,
+  //       file.fileId,
+  //       sessionId,
+  //       file.summary,
+  //       previousUserQuery,
+  //       previousModelResponse,
+  //     );
+  //     rawExtractedContent.push(...fileResults.rawExtractedContent);
+  //     results.push(...fileResults.filteredResults);
+  //   }
 
-    return {
-      filteredResults: results,
-      rawExtractedContent: rawExtractedContent,
-    };
-  }
+  //   return {
+  //     filteredResults: results,
+  //     rawExtractedContent: rawExtractedContent,
+  //   };
+  // }
 
-  private async hybridProcessFiles(
-    files: Array<{ fileId: string; name: string; questions: string[]; description: string; fileTextByPages?: string }>,
-    userQuery: string,
-    userId: string,
-    sessionId: string,
-    previousUserQuery?: string,
-    previousModelResponse?: string,
-  ): Promise<{
-    filteredResults: Array<{
-      fileId: string;
-      name: string;
-      content: string;
-      userId: string;
-    }>;
-    rawExtractedContent: RawExtractedContent[];
-  }> {
-    // Hybrid: prioritize files with more relevant questions, process in optimized batches
-    const prioritizedFiles = files.sort((a, b) => {
-      const aRelevance = this.calculateFileRelevance(a.description, userQuery);
-      const bRelevance = this.calculateFileRelevance(b.description, userQuery);
-      return bRelevance - aRelevance;
-    });
+  // private async hybridProcessFiles(
+  //   files: Array<{ fileId: string; name: string; questions: string[]; description: string; fileTextByPages?: string }>,
+  //   userQuery: string,
+  //   userId: string,
+  //   sessionId: string,
+  //   previousUserQuery?: string,
+  //   previousModelResponse?: string,
+  // ): Promise<{
+  //   filteredResults: Array<{
+  //     fileId: string;
+  //     name: string;
+  //     content: string;
+  //     userId: string;
+  //   }>;
+  //   rawExtractedContent: RawExtractedContent[];
+  // }> {
+  //   // Hybrid: prioritize files with more relevant questions, process in optimized batches
+  //   const prioritizedFiles = files.sort((a, b) => {
+  //     const aRelevance = this.calculateFileRelevance(a.description, userQuery);
+  //     const bRelevance = this.calculateFileRelevance(b.description, userQuery);
+  //     return bRelevance - aRelevance;
+  //   });
 
-    // Process high-priority files first in smaller batches
-    const highPriority = prioritizedFiles.slice(0, Math.ceil(files.length / 2));
-    const lowPriority = prioritizedFiles.slice(Math.ceil(files.length / 2));
+  //   // Process high-priority files first in smaller batches
+  //   const highPriority = prioritizedFiles.slice(0, Math.ceil(files.length / 2));
+  //   const lowPriority = prioritizedFiles.slice(Math.ceil(files.length / 2));
 
-    const highPriorityResults = await this.batchProcessFiles(highPriority, userQuery, userId, sessionId, previousUserQuery, previousModelResponse);
-    const lowPriorityResults = await this.batchProcessFiles(lowPriority, userQuery, userId, sessionId, previousUserQuery, previousModelResponse);
+  //   const highPriorityResults = await this.batchProcessFiles(highPriority, userQuery, userId, sessionId, previousUserQuery, previousModelResponse);
+  //   const lowPriorityResults = await this.batchProcessFiles(lowPriority, userQuery, userId, sessionId, previousUserQuery, previousModelResponse);
 
-    return {
-      filteredResults: [...highPriorityResults.filteredResults, ...lowPriorityResults.filteredResults],
-      rawExtractedContent: [...highPriorityResults.rawExtractedContent, ...lowPriorityResults.rawExtractedContent],
-    };
-  }
+  //   return {
+  //     filteredResults: [...highPriorityResults.filteredResults, ...lowPriorityResults.filteredResults],
+  //     rawExtractedContent: [...highPriorityResults.rawExtractedContent, ...lowPriorityResults.rawExtractedContent],
+  //   };
+  // }
 
   private calculateFileRelevance(description: string, query: string): number {
     const queryWords = query.toLowerCase().split(' ');
@@ -1129,236 +1135,238 @@ IMPORTANT:
     return matches / queryWords.length;
   }
 
-  // Optimization: Batch processing for multiple files
-  async batchProcessFiles(
-    files: Array<{ fileId: string; name: string; questions: string[]; description: string; summary?: string }>,
-    userQuery: string,
-    userId: string,
-    sessionId: string,
-    previousUserQuery?: string,
-    previousModelResponse?: string,
-  ): Promise<{
-    filteredResults: Array<{
-      fileId: string;
-      name: string;
-      content: string;
-      userId: string;
-    }>;
-    rawExtractedContent: RawExtractedContent[];
-  }> {
+  // // Optimization: Batch processing for multiple files
+  // async batchProcessFiles(
+  //   files: Array<{ fileId: string; name: string; questions: string[]; description: string; summary?: string }>,
+  //   userQuery: string,
+  //   userId: string,
+  //   sessionId: string,
+  //   previousUserQuery?: string,
+  //   previousModelResponse?: string,
+  // ): Promise<{
+  //   filteredResults: Array<{
+  //     fileId: string;
+  //     name: string;
+  //     content: string;
+  //     userId: string;
+  //   }>;
+  //   rawExtractedContent: RawExtractedContent[];
+  // }> {
 
-    try {
-      // Process files in parallel with controlled concurrency
-      const batchSize = 3; // Limit concurrent processing to avoid rate limits
-      const results: Array<{
-        fileId: string;
-        name: string;
-        content: string;
-        userId: string;
-      }> = [];
-      const rawExtractedContent: RawExtractedContent[] = [];
+  //   try {
+  //     // Process files in parallel with controlled concurrency
+  //     const batchSize = 3; // Limit concurrent processing to avoid rate limits
+  //     const results: Array<{
+  //       fileId: string;
+  //       name: string;
+  //       content: string;
+  //       userId: string;
+  //     }> = [];
+  //     const rawExtractedContent: RawExtractedContent[] = [];
 
-      for (let i = 0; i < files.length; i += batchSize) {
-        const batch = files.slice(i, i + batchSize);
-        const batchPromises = batch.map(file => 
-          this.processQuestionsForQuery(
-            file.description,
-            userQuery,
-            userId,
-            file.fileId,
-            sessionId,
-            file.summary,
-            previousUserQuery,
-            previousModelResponse,
-          )
-        );
+  //     for (let i = 0; i < files.length; i += batchSize) {
+  //       const batch = files.slice(i, i + batchSize);
+  //       const batchPromises = batch.map(file => 
+  //         this.processQuestionsForQuery(
+  //           file.description,
+  //           userQuery,
+  //           userId,
+  //           file.fileId,
+  //           sessionId,
+  //           file.summary,
+  //           previousUserQuery,
+  //           previousModelResponse,
+  //         )
+  //       );
         
-        const batchResults = await Promise.all(batchPromises);
-        results.push(...batchResults.map(br => br.filteredResults).flat());
-        rawExtractedContent.push(...batchResults.map(br => br.rawExtractedContent).flat());
+  //       const batchResults = await Promise.all(batchPromises);
+  //       results.push(...batchResults.map(br => br.filteredResults).flat());
+  //       rawExtractedContent.push(...batchResults.map(br => br.rawExtractedContent).flat());
 
-      }
+  //     }
 
-      return {
-        filteredResults: results,
-        rawExtractedContent: rawExtractedContent ,
-      };
-    } catch (error) {
-      console.error('Error in batchProcessFiles:', error);
-      return {
-        filteredResults: [],
-        rawExtractedContent: [],
-      };
-    }
-  }
+  //     return {
+  //       filteredResults: results,
+  //       rawExtractedContent: rawExtractedContent ,
+  //     };
+  //   } catch (error) {
+  //     console.error('Error in batchProcessFiles:', error);
+  //     return {
+  //       filteredResults: [],
+  //       rawExtractedContent: [],
+  //     };
+  //   }
+  // }
 
   // Process questions for query - uses questions for semantic search to handle generic queries
-  async processQuestionsForQuery(
-    description: string,
-    userQuery: string,
-    userId: string,
-    fileId: string,
-    sessionId: string,
-    summary?: string,
-    previousUserQuery?: string,
-    previousModelResponse?: string,
-  ): Promise<{
-    filteredResults: Array<{
-      fileId: string;
-      name: string;
-      content: string;
-      userId: string;
-    }>;
-    rawExtractedContent: RawExtractedContent[];
-  }> {
-    try {
-      // Use full file content for question analysis to ensure high-quality questions
-      let relevantContent = '';
+  // async processQuestionsForQuery(
+  //   description: string,
+  //   userQuery: string,
+  //   userId: string,
+  //   fileId: string,
+  //   sessionId: string,
+  //   summary?: string,
+  //   previousUserQuery?: string,
+  //   previousModelResponse?: string,
+  // ): Promise<{
+  //   filteredResults: Array<{
+  //     fileId: string;
+  //     name: string;
+  //     content: string;
+  //     userId: string;
+  //   }>;
+  //   rawExtractedContent: RawExtractedContent[];
+  // }> {
+  //   try {
+  //     // Use full file content for question analysis to ensure high-quality questions
+  //     let relevantContent = '';
       
-      if (summary) {
-        // Full content is essential for generating comprehensive, relevant questions
-        relevantContent = summary;
-      }
+  //     if (summary) {
+  //       // Full content is essential for generating comprehensive, relevant questions
+  //       relevantContent = summary;
+  //     }
 
-      // Prompt chaining - combine question analysis and generation
-      /*const combinedResponseFormat = z.object({
-        relevantQuestions: z.array(z.string()),
-        needsNewQuestions: z.boolean(),
-        newQuestions: z.array(z.string()),
-      });*/
+  //     // Prompt chaining - combine question analysis and generation
+  //     /*const combinedResponseFormat = z.object({
+  //       relevantQuestions: z.array(z.string()),
+  //       needsNewQuestions: z.boolean(),
+  //       newQuestions: z.array(z.string()),
+  //     });*/
 
-      const response = await this.gemini.models.generateContent({
-        model: this.geminiModels.flash,
-        contents: `User query: ${userQuery}\n\nFile description: ${description}${relevantContent ? `\n\nFile summary: ${relevantContent}` : ''}\n\nPrevious user query: ${previousUserQuery || 'No previous user query exists'}\n\nPrevious model response: ${previousModelResponse || 'No previous model response exists'}`,
-        config:  {
-          systemInstruction: `You are an intelligent question processor. Analyze the user query against existing questions and file summary to determine the best approach.
+  //     const response = await this.gemini.models.generateContent({
+  //       model: this.geminiModels.flash,
+  //       contents: `User query: ${userQuery}\n\nFile description: ${description}${relevantContent ? `\n\nFile summary: ${relevantContent}` : ''}\n\nPrevious user query: ${previousUserQuery || 'No previous user query exists'}\n\nPrevious model response: ${previousModelResponse || 'No previous model response exists'}`,
+  //       config:  {
+  //         systemInstruction: `You are an intelligent question processor. Analyze the user query against existing questions and file summary to determine the best approach.
           
-          TASK 1: Determine which existing questions help answer the user query
-          - Review each existing question against the user query and file description
-          - Select only questions that are directly relevant to answering the user query
+  //         TASK 1: Determine which existing questions help answer the user query
+  //         - Review each existing question against the user query and file description
+  //         - Select only questions that are directly relevant to answering the user query
           
-          TASK 2: Determine if new questions are needed
-          - If the existing relevant questions are sufficient to answer the user query, set needsNewQuestions to false
-          - If the existing questions are insufficient or irrelevant, set needsNewQuestions to true
-          - To determine if new questions are needed, make sure that the existing questions cover everything that the user query asks for. For this, consider that the questions should be as complete as possible, so that the user query can be answered fully.
+  //         TASK 2: Determine if new questions are needed
+  //         - If the existing relevant questions are sufficient to answer the user query, set needsNewQuestions to false
+  //         - If the existing questions are insufficient or irrelevant, set needsNewQuestions to true
+  //         - To determine if new questions are needed, make sure that the existing questions cover everything that the user query asks for. For this, consider that the questions should be as complete as possible, so that the user query can be answered fully.
           
-          TASK 3: Generate new questions if needed
-          - If needsNewQuestions is true, generate 1-8 specific questions based on the file summary and the user query that would help answer it
-          - If needsNewQuestions is false, set newQuestions to an empty array
-          - Make questions concise, specific, and directly relevant to the user query
+  //         TASK 3: Generate new questions if needed
+  //         - If needsNewQuestions is true, generate 1-8 specific questions based on the file summary and the user query that would help answer it
+  //         - If needsNewQuestions is false, set newQuestions to an empty array
+  //         - Make questions concise, specific, and directly relevant to the user query
           
-          Return your analysis in the specified JSON format with:
-          - relevantQuestions: array of existing questions that help answer the user query
-          - needsNewQuestions: boolean indicating if new questions should be generated
-          - newQuestions: array of new questions (empty array if needsNewQuestions is false)
+  //         Return your analysis in the specified JSON format with:
+  //         - relevantQuestions: array of existing questions that help answer the user query
+  //         - needsNewQuestions: boolean indicating if new questions should be generated
+  //         - newQuestions: array of new questions (empty array if needsNewQuestions is false)
           
-          NOTE 1: If the user sends a query that asks for more information, generate new specific questions different from the existing ones that you receive, that further investigate the topic the user previously asked about, and further explore things that weren't responded in the previous model response. Deduce from the user query, the file summary, the file description, and the current questions, what new questions you can generate. Examples of this kind of user query: "Provide more information about this", "Tell me more about that", "What else does it say?", "Can you provide more details?", "What else does the file say?", "Provide more information about the file".
+  //         NOTE 1: If the user sends a query that asks for more information, generate new specific questions different from the existing ones that you receive, that further investigate the topic the user previously asked about, and further explore things that weren't responded in the previous model response. Deduce from the user query, the file summary, the file description, and the current questions, what new questions you can generate. Examples of this kind of user query: "Provide more information about this", "Tell me more about that", "What else does it say?", "Can you provide more details?", "What else does the file say?", "Provide more information about the file".
 
-          NOTE 2: The questions should be in the same language as the file summary.
-          `,
-          temperature: 0.2,
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              relevantQuestions: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.STRING
-                }
-              },
-              needsNewQuestions: { 
-                type: Type.BOOLEAN
-              },
-              newQuestions: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.STRING
-                }
-              },
-            }
-          }
-        },
-      });
+  //         NOTE 2: The questions should be in the same language as the file summary.
+  //         `,
+  //         temperature: 0.2,
+  //         responseMimeType: 'application/json',
+  //         responseSchema: {
+  //           type: Type.OBJECT,
+  //           properties: {
+  //             relevantQuestions: {
+  //               type: Type.ARRAY,
+  //               items: {
+  //                 type: Type.STRING
+  //               }
+  //             },
+  //             needsNewQuestions: { 
+  //               type: Type.BOOLEAN
+  //             },
+  //             newQuestions: {
+  //               type: Type.ARRAY,
+  //               items: {
+  //                 type: Type.STRING
+  //               }
+  //             },
+  //           }
+  //         }
+  //       },
+  //     });
 
-      const analysis = JSON.parse(response.text);
-      if (!analysis) {
-        return {
-          filteredResults: [],
-          rawExtractedContent: [],
-        };
-      }
+  //     const analysis = JSON.parse(response.text);
+  //     if (!analysis) {
+  //       return {
+  //         filteredResults: [],
+  //         rawExtractedContent: [],
+  //       };
+  //     }
 
-      // Determine which questions to use
-      let questionsToProcess: string[] = [];
+  //     // Determine which questions to use
+  //     let questionsToProcess: string[] = [];
       
-      if (analysis.relevantQuestions.length > 0) {
-        questionsToProcess = analysis.relevantQuestions;
-      } else if (analysis.needsNewQuestions && analysis.newQuestions) {
-        questionsToProcess = analysis.newQuestions;
-      } else {
-        // Fallback: if no questions are relevant and we can't generate new ones
-        return {
-          filteredResults: [],
-          rawExtractedContent: [],
-        };
-      }
+  //     if (analysis.relevantQuestions.length > 0) {
+  //       questionsToProcess = analysis.relevantQuestions;
+  //     } else if (analysis.needsNewQuestions && analysis.newQuestions) {
+  //       questionsToProcess = analysis.newQuestions;
+  //     } else {
+  //       // Fallback: if no questions are relevant and we can't generate new ones
+  //       return {
+  //         filteredResults: [],
+  //         rawExtractedContent: [],
+  //       };
+  //     }
 
-      // Optimization 3: Parallel processing of semantic searches and filtering
-      const searchPromises = questionsToProcess.map(question => 
-        this.semanticSearch(question, userId, [fileId])
-      );
+  //     // Optimization 3: Parallel processing of semantic searches and filtering
+  //     const searchPromises = questionsToProcess.map(question => 
+  //       this.semanticSearch(question, userId, [fileId])
+  //     );
       
-      const allSearchResults = await Promise.all(searchPromises);
+  //     const allSearchResults = await Promise.all(searchPromises);
       
-      // Filter out empty search results and process in parallel
-      const validSearchResults = allSearchResults.filter(results => results && results.hits.length > 0);
+  //     // Filter out empty search results and process in parallel
+  //     const validSearchResults = allSearchResults.filter(results => results && results.hits.length > 0);
       
-      if (validSearchResults.length === 0) {
-        return {
-          filteredResults: [],
-          rawExtractedContent: [],
-        };
-      }
+  //     if (validSearchResults.length === 0) {
+  //       return {
+  //         filteredResults: [],
+  //         rawExtractedContent: [],
+  //       };
+  //     }
       
-      const rawExtractedContent = await this.rawExtractedContentsRepository.save(
-        validSearchResults.flatMap(result => 
-          result.hits.map(hit => ({
-            text: (hit.fields as any).chunk_text,
-            fileId: (hit.fields as any).fileId,
-            fileName: (hit.fields as any).name,
-            userId: userId,
-            sessionId: sessionId,
-          } as RawExtractedContent))
-        )
-      );
+  //     const rawExtractedContent = await this.rawExtractedContentsRepository.save(
+  //       validSearchResults.flatMap(result => 
+  //         result.hits.map(hit => ({
+  //           text: (hit.fields as any).chunk_text,
+  //           fileId: (hit.fields as any).fileId,
+  //           fileName: (hit.fields as any).name,
+  //           userId: userId,
+  //           sessionId: sessionId,
+  //         } as RawExtractedContent))
+  //       )
+  //     );
 
-      // Batch filter operations in parallel
-      const filterPromises = validSearchResults.map(searchResults => 
-        this.filterSearchResults(searchResults.hits, searchResults.question, userQuery)
-      );
+  //     // Batch filter operations in parallel
+  //     const filterPromises = validSearchResults.map(searchResults => 
+  //       this.filterSearchResults(searchResults.hits, searchResults.question, userQuery)
+  //     );
       
-      const filteredResults = await Promise.all(filterPromises);
+  //     const filteredResults = await Promise.all(filterPromises);
       
-      // Transform to expected format
-      return {
-        filteredResults: filteredResults.map(({ fileId, name, text }) => ({
-          fileId,
-          name,
-          content: text,
-          userId
-        })),
-        rawExtractedContent: rawExtractedContent,
-    }
+  //     // Transform to expected format
+  //     return {
+  //       filteredResults: filteredResults.map(({ filteredTexts }) => ({
+  //         filteredTexts: filteredTexts.map(text => ({
+  //           fileId: text.fileId,
+  //           name: text.name,
+  //           content: text.text,
+  //           userId: userId,
+  //         })),
+  //       })),
+  //       rawExtractedContent: rawExtractedContent,
+  //   }
       
-    } catch (error) {
-      console.error('Error in processQuestionsForQuery:', error);
-      return {
-        filteredResults: [],
-        rawExtractedContent: [],
-      };
-    }
-  }
+  //   } catch (error) {
+  //     console.error('Error in processQuestionsForQuery:', error);
+  //     return {
+  //       filteredResults: [],
+  //       rawExtractedContent: [],
+  //     };
+  //   }
+  // }
 
   async generateQuestionsFromQuery(query: string, messages: ChatMessage[], fileContents: {
     id: string,

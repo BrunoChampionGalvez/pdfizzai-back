@@ -310,6 +310,14 @@ export class ChatService {
     const allRawContentBatch: any[] = []
     const allFilterPromises: Promise<{fileId: string; fileName: string; text: string; userId: string}>[] = []
     
+    // Collect all filter requests for batching
+    const allFilterRequests: Array<{
+      hits: any[],
+      question: string,
+      userQuery: string,
+      metadata: any
+    }> = []
+    
     allSearchResults.forEach((searchResult, index) => {
       const metadata = searchMetadata[index]
       
@@ -324,16 +332,33 @@ export class ChatService {
       
       allRawContentBatch.push(...rawContentForBatch)
       
-      // Create filter promise
-      allFilterPromises.push(
-        this.aiService.filterSearchResults(searchResult.hits, metadata.question, content)
-          .then(result => ({
-            fileId: result.fileId,
-            fileName: result.name,
-            text: result.text,
-            userId: userId,
-          }))
-      )
+      // Collect filter request data for batching
+      allFilterRequests.push({
+        hits: searchResult.hits,
+        question: metadata.question,
+        userQuery: content,
+        metadata: metadata
+      })
+    })
+    
+    // Process all filter requests in parallel for optimal performance
+    const allFilterPromisesArray = allFilterRequests.map(request => 
+      this.aiService.filterSearchResults(request.hits, request.question, request.userQuery)
+        .then((result) => result.filteredTexts.map(text => ({
+          fileId: text.fileId,
+          fileName: text.name,
+          text: text.text,
+          userId: userId,
+        })))
+    )
+    
+    // Wait for all filter operations to complete and flatten results
+    const allFilterResults = await Promise.all(allFilterPromisesArray)
+    const flattenedResults = allFilterResults.flat()
+    
+    // Convert each result to individual promises for compatibility with existing type
+    flattenedResults.forEach(result => {
+      allFilterPromises.push(Promise.resolve(result))
     })
     
     // Batch save all raw content at once
