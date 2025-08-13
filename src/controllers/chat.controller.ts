@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Param, UseGuards, Req, Res } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, UseGuards, Req, Res, Query } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { ChatService } from '../services/chat.service';
 import { CreateChatSessionDto, SendMessageDto } from '../dto/chat.dto';
@@ -230,6 +230,32 @@ export class ChatController {
         // For other types of errors, return a different message indicating it might be an access issue
         return { path: `[Error accessing]` };
       }
+    }
+  }
+
+  @Get('extracted-content/:rawRefId')
+  async getExtractedContentByRawRefId(
+    @Param('rawRefId') rawRefId: string,
+    @Query('sessionId') sessionId: string,
+    @Req() req: Request & { user: { userId: string } },
+  ): Promise<{ fileId: string; text: string; fileName: string }> {
+    try {
+      console.log(
+        `Getting extracted content for rawRefId ${rawRefId}, session ${sessionId}, for user ${req.user.userId}`,
+      );
+      const extractedContent = await this.chatService.getExtractedContentByRawRefId(
+        parseInt(rawRefId, 10),
+        req.user.userId,
+        sessionId,
+      );
+      return {
+        fileId: extractedContent.fileId,
+        text: extractedContent.text,
+        fileName: extractedContent.fileName,
+      };
+    } catch (e: unknown) {
+      console.error(`Error getting extracted content for rawRefId ${rawRefId}:`, e);
+      throw e; // Let the global error handler catch this
     }
   }
 }

@@ -497,6 +497,7 @@ export class FileService {
     userId: string,
     extractedContent: Array<{
       fileId: string;
+      rawRefId: number;
       name: string;
       content: string;
     }>,
@@ -505,8 +506,10 @@ export class FileService {
     for (const content of extractedContent) {
       const savedExtractedContent = await this.extractedContentRepository.save({
         sessionId,
-        session,
+        // Ensure we link the relation correctly
+        chatSession: session,
         fileId: content.fileId,
+        rawRefId: content.rawRefId,
         fileName: content.name,
         userId,
         text: content.content,

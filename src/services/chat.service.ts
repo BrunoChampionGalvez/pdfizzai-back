@@ -1,19 +1,19 @@
-import { BadRequestException, Injectable, NotFoundException, UnauthorizedException, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { ChatSession } from '../entities/chat-session.entity';
-import { ChatMessage, FileCitation, MessageRole } from '../entities/chat-message.entity';
-import { CreateChatSessionDto, SendMessageDto, ChatResponseDto, ChatReference } from '../dto/chat.dto';
-import { AIService } from './ai.service';
-import { FileService } from './file.service';
-import { FolderService } from './folder.service';
-import { PaymentService } from './payment.service';
-import { RawExtractedContent } from 'src/entities/raw-extracted-contents';
-import { ExtractedContent } from 'src/entities/extracted-content.entity';
+import { BadRequestException, Injectable, NotFoundException, UnauthorizedException, Logger } from '@nestjs/common'
+import { InjectRepository } from '@nestjs/typeorm'
+import { Repository } from 'typeorm'
+import { ChatSession } from '../entities/chat-session.entity'
+import { ChatMessage, FileCitation, MessageRole } from '../entities/chat-message.entity'
+import { CreateChatSessionDto, SendMessageDto, ChatResponseDto, ChatReference } from '../dto/chat.dto'
+import { AIService } from './ai.service'
+import { FileService } from './file.service'
+import { FolderService } from './folder.service'
+import { PaymentService } from './payment.service'
+import { RawExtractedContent } from 'src/entities/raw-extracted-contents'
+import { ExtractedContent } from 'src/entities/extracted-content.entity'
 
 @Injectable()
 export class ChatService {
-  private readonly logger = new Logger(ChatService.name);
+  private readonly logger = new Logger(ChatService.name)
 
   constructor(
     @InjectRepository(ChatSession)
@@ -22,10 +22,12 @@ export class ChatService {
     private chatMessageRepository: Repository<ChatMessage>,
     @InjectRepository(RawExtractedContent)
     private rawExtractedContentsRepository: Repository<RawExtractedContent>,
+    @InjectRepository(ExtractedContent)
+    private extractedContentRepository: Repository<ExtractedContent>,
     private readonly aiService: AIService,
     private readonly fileService: FileService,
     private readonly folderService: FolderService,
-    private readonly paymentService: PaymentService, // Assuming you have a PaymentService to handle subscription logic
+    private readonly paymentService: PaymentService,
   ) {}
 
   /**
@@ -249,6 +251,7 @@ export class ChatService {
     fileIds = [...new Set(fileIds)];
 
     let extractedContent: Array<{
+      rawRefId: number;
       fileId: string;
       name: string;
       content: string;
@@ -264,40 +267,12 @@ export class ChatService {
   
     // Optimized: Batch specific queries processing
     questions.push(...queriesArray)
-    
-    // Parallel semantic searches for specific queries
-    const specificSearchPromises = queriesArray.map(query => 
-      this.aiService.semanticSearch(query, userId, fileContents.map(fc => fc.id))
-    )
-    
-    const specificSearchResults = await Promise.all(specificSearchPromises)
-    
-    // Batch save all raw extracted contents from specific queries
-    const allSpecificRawContents = specificSearchResults.flatMap(searchResult => 
-      searchResult.hits.map(hit => ({
-        text: (hit.fields as any).chunk_text,
-        fileId: (hit.fields as any).file_id,
-        fileName: (hit.fields as any).file_name,
-        userId: userId,
-        sessionId: sessionId,
-      }))
-    )
-    
-    if (allSpecificRawContents.length > 0) {
-      rawExtractedContents = await this.rawExtractedContentsRepository.save(allSpecificRawContents)
-    }
-    
-    // Parallel filter operations for specific queries
-    const specificFilterPromises = specificSearchResults.map(searchResult => 
-      this.aiService.filterSearchResults(searchResult.hits, searchResult.question, content)
-    )
-    
-    const resultsSpecificQueries = await Promise.all(specificFilterPromises)
-
     // Optimized: Batch question generation and parallel processing
     const allGenericPromises: Promise<{fileId: string; fileName: string; text: string; userId: string}[]>[] = []
     const allRawContentPromises: Promise<RawExtractedContent[]>[] = []
     
+    this.logger.debug('Optimized: Batch question generation and parallel processing');
+        
     // Batch all question generation requests first
     const questionGenerationPromises = queriesArray.map(query => 
       this.aiService.generateQuestionsFromQuery(query, messages.slice(-5), fileContents)
@@ -305,6 +280,8 @@ export class ChatService {
     
     const allQuestionResults = await Promise.all(questionGenerationPromises)
     
+    this.logger.debug('All question generation requests processed in parallel');
+
     // Process all questions in optimized batches
     // Create all search promises for all query-file combinations at once
     const allSearchPromises: Promise<any>[] = []
@@ -369,30 +346,35 @@ export class ChatService {
     // Add all filter promises to the main promise array
     allGenericPromises.push(Promise.all(allFilterPromises))
     
+    this.logger.debug('All filter promises added to main promise array');
+
     // Execute all remaining operations in parallel
     const [resultsGenericQueries, allRawContents] = await Promise.all([
       Promise.all(allGenericPromises).then(results => results.flat()),
       Promise.all(allRawContentPromises).then(results => results.flat())
     ])
+
+    this.logger.debug('All remaining operations executed in parallel');
     
     // Update the rawExtractedContents variable with all batch results
     rawExtractedContents = [...rawExtractedContents, ...allRawContents]
 
+    let numRawReferences = session.numRawReferences
 
-    extractedContent = [...extractedContent, ... resultsGenericQueries.map((result) => ({
-      fileId: result.fileId,
-      name: result.fileName,
-      content: result.text,
-      userId: userId,
-    }))]
+    extractedContent = [...extractedContent, ... resultsGenericQueries.map((result) => {
+      numRawReferences++
+      return {
+        fileId: result.fileId,
+        rawRefId: numRawReferences,
+        name: result.fileName,
+        content: result.text,
+        userId: userId,
+      }
+    })]
 
-    extractedContent = [...extractedContent, ...resultsSpecificQueries.map((result) => ({
-      fileId: result.fileId,
-      name: result.name,
-      content: result.text,
-      userId: userId,
-    }))]
-
+    await this.chatSessionRepository.update(sessionId, {
+      numRawReferences: numRawReferences,
+    })
 
       console.log(
         '🎯 Chat Service: Starting sendMessage for session',
@@ -405,6 +387,8 @@ export class ChatService {
         userId,
         extractedContent,
       );
+
+      this.logger.debug('Extracted content saved successfully');
 
       // Remove messages from session to avoid circular reference issues
       (session as any).messages = undefined;
@@ -585,15 +569,25 @@ export class ChatService {
       const transformedEntityCitations = await Promise.all(
         citations.map(async (citation: { id: string }) => {
           try {
-            const pathOrName = await this.getReferencePathById(
-              citation,
+            // The citation.id should be a rawRefId (numeric), not a file ID
+            const rawRefId = parseInt(citation.id, 10);
+            
+            if (isNaN(rawRefId)) {
+              console.error('Citation ID is not a valid rawRefId:', citation.id);
+              return null;
+            }
+            
+            // Get the extracted content using rawRefId
+            const extractedContent = await this.getExtractedContentByRawRefId(
+              rawRefId,
               userId,
+              sessionId,
             );
 
-            if (citation) {
+            if (extractedContent) {
               return {
-                id: citation.id,
-                text: pathOrName, // pathOrName is the file path
+                id: citation.id, // Keep original citation ID
+                text: extractedContent.fileName, // Use fileName as the display text
               } as FileCitation;
             }
             return null;
@@ -827,6 +821,34 @@ export class ChatService {
         } catch (error) {
           return this.fileService.getFilePath(fileId, userId);
         }
+  }
+
+  async getExtractedContentByRawRefId(
+    rawRefId: number,
+    userId: string,
+    sessionId: string,
+  ): Promise<ExtractedContent> {
+    // Query directly from ExtractedContent and join the owning ChatSession to filter by user and session
+    const extractedContent = await this.extractedContentRepository
+      .createQueryBuilder('extractedContent')
+      .leftJoin('extractedContent.chatSession', 'session')
+      .where('session.user_id = :userId', { userId })
+      .andWhere('session.id = :sessionId', { sessionId })
+      .andWhere('extractedContent.rawRefId = :rawRefId', { rawRefId })
+      .select([
+        'extractedContent.id',
+        'extractedContent.fileId',
+        'extractedContent.text',
+        'extractedContent.fileName',
+        'extractedContent.rawRefId',
+      ])
+      .getOne()
+
+    if (!extractedContent) {
+      throw new NotFoundException('Extracted content with rawRefId ' + rawRefId + ' not found for session ' + sessionId)
+    }
+
+    return extractedContent
   }
 
   async loadReferenceAgain(

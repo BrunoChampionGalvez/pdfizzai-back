@@ -13,6 +13,9 @@ export class ExtractedContent {
     @Column({ type: 'text', nullable: true })
     text: string;
 
+    @Column({ type: 'int', nullable: true })
+    rawRefId: number;
+    
     @Column({ type: 'text', nullable: true })
     fileId: string; // ID of the file from which this content was extracted
 

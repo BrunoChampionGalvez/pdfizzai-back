@@ -250,7 +250,7 @@ export class AIService {
 
       // Format input for Responses API - can be a simple string or array of message objects
       const inputContent: EasyInputMessage[] = messages.map((msg) => {
-        const messageExtractedContentStr = `\n\n${msg.extractedContents.map(e => `File Id: ${e.fileId}\nFile Name: ${e.fileName}\nText: ${e.text}\n\n`).join('')}`
+        const messageExtractedContentStr = `\n\n${msg.extractedContents.map(e => `Id: ${e.rawRefId}\nFile Name: ${e.fileName}\nText: ${e.text}\n\n`).join('')}`
         return {
           role: msg.role === MessageRole.USER ? MessageRole.USER : MessageRole.ASSISTANT,
           content: `${msg.role === MessageRole.USER ? `Context: ${messageExtractedContentStr}` : ``}\n\n${msg.role === MessageRole.USER ? `User query: ${msg.content}` : `Model response: ${msg.content}`}`,
@@ -269,11 +269,11 @@ export class AIService {
       );
 
       const response = await this.openaiClient.responses.create({
-        model: 'gpt-5-mini-2025-08-07',
+        model: 'gpt-5-nano-2025-08-07',
         instructions: systemPrompt,
         input: inputContent,
         reasoning: {
-          effort: 'low'
+          effort: 'minimal'
         },
         stream: true,
       });
@@ -311,72 +311,47 @@ export class AIService {
 
   private buildSystemPrompt(): string {
     const prompt = `
-      ROLE: Answer user queries using only provided context and message history.
+      ROLE: Answer user query based on the provided context and message history.
       
       SOURCES:
       1. Context: Text portions with id, title, and content
       2. History Summaries: Previous conversation summaries
-      3. Questions: Used for semantic search retrieval
       
       RULES:
       - Prioritize the provided context over your general knowledge when responding to the user query.
       - Every statement that you extracted from the context MUST have a reference, that should ALWAYS be enclosed in the [REF] and [/REF] tags, as we will later discuss.
-      - Don't repeat the information that you provide in the references, in your statements
+      - Don't repeat in your statements the exact text that you are provided in the context. Instead, paraphrase it.
       - If no relevant info found to answer the user query appropriately, respond the following (translate it if the user talks to you in another language): "The requested information was not found in the chat context. Please try again by adding more files to the chat context.". NEVER ask the user to provide information, excerpts or extracts.
-      - Match user's language but keep reference text in original language
-      
+      - Match user's language in your response.
+
       REFERENCE FORMAT (required for each statement):
-      Statement text.
-      [REF]
-      {
-        "id": "file-portion-id",
-        "text": "exact text from source"
-      }
-      [/REF]
+      Statement text.[REF]id_of_the_text_portion_from_the_context[/REF]
       
       Example 1:
-      Mitochondria produce ATP through oxidative phosphorylation.
-      [REF]
-      {
-        "id": "1003",
-        "text": "Mitochondria serve as the primary energy generators in human cells by converting glucose into ATP through the process of oxidative phosphorylation."
-      }
-      [/REF]
+      Mitochondria produce ATP through oxidative phosphorylation.[REF]13[/REF]
 
       Example 2:
-      The human body has 206 bones.
-      [REF]
-      {
-        "id": "1004",
-        "text": "The human body has 206 bones, including the 204 bones of the body and the 2 spines."
-      }
-      [/REF]
+      The human body has 206 bones.[REF]5[/REF]
 
       NOTE 1: Each reference should follow it's corresponding statement. Don't return all the references at the end.
 
-      NOTE 2: NEVER provide references longer than one sentence, the references' text must ALWAYS be one sentence long. If you need to provide multiple sentences, provide multiple references, each one with their own different opening and closing reference tags ([REF] and [/REF]).
+      NOTE 2: When providing each reference, ALWAYS open and close the reference tags ([REF] and [/REF]). NEVER provide a reference with only an opening or only a closing tag, or neither of them. Both MUST ALWAYS be provided.
 
-      NOTE 3: It is EXTREMELY IMPORTANT that when providing the text of the references, you NEVER add or remove any characters from it, of any type. You MUST select one sentence from the context provided, as stated in NOTE 3, but you should NEVER add or remove any characters from that sentence you have selected as text of the reference. The references' text should be exactly as you received it in the context.
+      NOTE 3: ALWAYS answer in sections (with their corresponding headings or subheadings). And do it using markdown formatting elements. For example, headings, subheadings, font bold, italic, bullet points, and numbered lists. Use headings with #, ##, ###; bold with **; italic with *; bullet points with -; and numbered lists with 1., 2., 3., etc.
 
-      NOTE 4: When providing each reference, ALWAYS open and close the reference tags ([REF] and [/REF]). NEVER provide a reference with only an opening or only a closing tag, or neither of them. Both MUST ALWAYS be provided.
+      NOTE 4: Don't provide the same reference multiple times, only once.
 
-      NOTE 5: When your response is suitable to be answered in sections (with their corresponding headings or subheadings), ALWAYS do it using markdown formatting elements. For example, headings, subheadings, font bold, italic, bullet points, and numbered lists. Use headings with #, ##, ###; bold with **; italic with *; bullet points with -; and numbered lists with 1., 2., 3., etc.
+      NOTE 5: Respond with information relevant to the user query. On that note, you don't have to use all the information of the context provided to you.
 
-      NOTE 6: Don't provide the same reference multiple times, only once.
+      NOTE 6: NEVER repeat in the statements you provide the exact same text from the text portions of the context, paraphrase it if necessary.
 
-      NOTE 7: Respond with information relevant to the user query. On that note, you don't have to use all the information of the context provided to you.
+      NOTE 7: NEVER offer the user to generate tables.
 
-      NOTE 8: NEVER repeat the exact same text from the references' text in the statements you provide, paraphrase it if necessary.
+      NOTE 8: NEVER ask the user further questions about how he would like your response. Just use the context provided and the user query to answer the question. For example, dont ask him "Do you prefer a section-by-section detailed analysis or a one long paragraph summary?".
 
-      NOTE 9: NEVER offer the user to generate tables.
+      NOTE 9: ALWAYS be enthusiastic when talking to the user. For example, when greeting him, say something like "Hi! What can I help you with?", "Hello! How can I assist you today?", or anything similar to that. Or when the user is asking for help, say something like "I'm here to help you. What do you need?", "I'm happy to help you with that!", or anything similar to that. As the rest of your statements, provide it in the language the user talkes to you.
 
-      NOTE 10: NEVER ask the user further questions about how he would like your response. Just use the context provided and the user query to answer the question. For example, dont ask him "Do you prefer a section-by-section detailed analysis or a one long paragraph summary?".
-
-      NOTE 11: ALWAYS be enthusiastic when talking to the user. For example, when greeting him, say something like "Hi! What can I help you with?" or "Hello! How can I assist you today?". Or when the user is asking for help, say something like "I'm here to help you. What do you need?" or "I'm happy to help you with that!". As the rest of your statements, provide it in the language the user talkes to you.
-
-      NOTE 12: If the text of a reference ends in a ',' or a ';' character, DON'T interchange it for a '.' character, and viceversa.
-
-      NOTE 13: Don't provide the ids of the files as part of the statements, only use them as part of the references.
+      NOTE 10: Don't provide the ids of the text portions from the context as part of your statements, only use them to provide the references inside the [REF] and [/REF] tags.
     `;
 
     return prompt;
@@ -831,76 +806,9 @@ IMPORTANT:
 
     // OPENAI
 
-    // const response = await this.openaiClient.responses.parse({
-    //   model: 'gpt-5-nano-2025-08-07',
-    //   instructions: `Filter text chunks to extract the shortest text snippet possible that answers the user query (no longer than one sentence).
-        
-    //   TASK: Find the most relevant text snippet
-    //   - Extract the single most relevant text snippet that directly answers the query from the chunks from a file that you receive (no longer than one sentence).
-    //   - DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, and ANY character that was in the original chunk text, including numbers as well.
-
-    //   INPUT: Query + array of {id, name, text} objects
-    //   OUTPUT: JSON with fileId, name, and the extracted text snippet
-        
-    //   EXAMPLE OUTPUT:
-    //   {"fileId": "123", "name": "Example File", "text": "This is the extracted text snippet."}
-      
-    //   NOTE 1: If the text is split in two parts by information that was extracted from tables or graphs, provide only the longest coherent part of the two.
-        
-    //   NOTE 2: The extracted text snippet should be in the same language as the text chunks.
-      
-    //   NOTE 3: If the text doesn't contain any relevant information to answer the query, return empty strings for fileId, name, and text.`,
-
-    //   input: `Query: ${question}\n\nChunks: \n${searchDataStr}`,
-    //   text: {
-    //     format: zodTextFormat(responseFormat, "filter_text")
-    //   },
-    //   reasoning: {
-    //     effort: 'minimal'
-    //   }
-    // })
-
-    // const parsedResult = response.output_parsed
-
-    // let response2
-    // if (parsedResult?.text) {
-    //   response2 = await this.openaiClient.responses.create({
-    //     model: 'gpt-5-nano-2025-08-07',
-    //     instructions: `Filter the text following these guidelines:
-
-    //     1. If the text has numerical references like [1], [2], [3] or 1, 2, 3, follow the following steps:
-    //       I. Split the text by the numerical references. These numerical references are detectable by seeing if the numbers present have semantical coherence with the rest of the text in which they are in. If they are random numbers inserted that don't have semantical coherence with the rest of the text, it is because they are numerical references. If, the numbers fit semantically within the text they are in, return the whole text.
-    //       II. Return only the longest part of the parts that were divided by these numerical references.
-    //       III. If the text doesn't have numerical references, return the whole text.
-    //       IV. Examples of texts with numerical references:
-    //         a. The mitochondria is the power house of the cell 1.
-    //         b. We drew the data from the records of the John Hopkins Hospital 3, 4, the participants were middle aged adult smokers 3.
-    //         c. Paliperidone is a second generation antipsychotic 2, usually applied by injectionss.
-    //         d. The mitochondria is the power house of the cell [1].
-    //         e. We drew the data from the records of the John Hopkins Hospital [3], [4], the participants were middle aged adult smokers [3].
-    //       V. Examples of texts without numerical references:
-    //         a. There were 237 participants in the study, 120 of which were men, and 117 women.
-    //         b. The participants in the experimental group received between 2 and 3 doses of the medication, same as the placebo group.
-    //         c. The psychological test, comprised of 87 questions, evaluates different aspects of emotional intelligence.
-
-    //     2. If the text contains the [START_PAGE] and [END_PAGE] markers in the middle, return the text with the markers, don't remove them.
-
-    //     NOTE: DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks. Including characters like >, ≥, ≤, <, =, -, {, }, (, ), [, ], +, /, ", ', and ANY character that was in the original chunk text.
-    //     `,
-    //     input: parsedResult?.text || '',
-    //     reasoning: {
-    //       effort: 'minimal'
-    //     },
-    //   })
-    // }
-
-    // GEMINI
-
-    const response = await this.gemini.models.generateContent({
-      model: this.geminiModels.flash,
-      contents: `Query: ${question}\n\nChunks: \n${searchDataStr}`,
-      config: {
-        systemInstruction: `Filter text chunks to extract the shortest text snippet possible that answers the user query (no longer than one sentence).
+    const response = await this.openaiClient.responses.parse({
+      model: 'gpt-5-nano-2025-08-07',
+      instructions: `Filter text chunks to extract the shortest text snippet possible that answers the user query (no longer than one sentence).
         
     TASK: Find the most relevant text snippet
     - Extract the single most relevant text snippet that directly answers the query from the chunks from a file that you receive (no longer than one sentence).
@@ -912,7 +820,7 @@ IMPORTANT:
     EXAMPLE OUTPUT:
     {"fileId": "123", "name": "Example File", "text": "This is the extracted text snippet."}
       
-    NOTE 1: If the text is split in two parts by information that was extracted from tables or graphs, provide the whole text, with the text in the middle as well.
+    NOTE 1: If the text is split in two parts by information that was extracted from tables or graphs, provide the part that is the longest.
         
     NOTE 2: The extracted text snippet should be in the same language as the text chunks.
       
@@ -921,20 +829,57 @@ IMPORTANT:
     NOTE 4: If the text contains the [START_PAGE] and [END_PAGE] markers in the MIDDLE of it, return the whole text, with the markers in the middle.
     
     NOTE 5: If the text ends in a ',' or a ';' character, DON'T interchange it for a '.' character, and viceversa.`,
-          temperature: 0.2,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              fileId: { type: Type.STRING },
-              name: { type: Type.STRING },
-              text: { type: Type.STRING },
-            },
-          }
+
+      input: `Query: ${question}\n\nChunks: \n${searchDataStr}`,
+      text: {
+        format: zodTextFormat(responseFormat, "filter_text")
+      },
+      reasoning: {
+        effort: 'minimal'
       }
     })
 
-    const parsedResult = JSON.parse(response.text) || {
+    // GEMINI
+
+    // const response = await this.gemini.models.generateContent({
+    //   model: this.geminiModels.flash,
+    //   contents: `Query: ${question}\n\nChunks: \n${searchDataStr}`,
+    //   config: {
+    //     systemInstruction: `Filter text chunks to extract the shortest text snippet possible that answers the user query (no longer than one sentence).
+        
+    // TASK: Find the most relevant text snippet
+    // - Extract the single most relevant text snippet that directly answers the query from the chunks from a file that you receive (no longer than one sentence).
+    // - DO NOT add or remove any characters from the text snippet you are returning, compared to the text in the chunks.
+
+    // INPUT: Query + array of {id, name, text} objects
+    // OUTPUT: JSON with fileId, name, and the extracted text snippet
+        
+    // EXAMPLE OUTPUT:
+    // {"fileId": "123", "name": "Example File", "text": "This is the extracted text snippet."}
+      
+    // NOTE 1: If the text is split in two parts by information that was extracted from tables or graphs, provide the part that is the longest.
+        
+    // NOTE 2: The extracted text snippet should be in the same language as the text chunks.
+      
+    // NOTE 3: If the text doesn't contain any relevant information to answer the query, return empty strings for fileId, name, and text.
+    
+    // NOTE 4: If the text contains the [START_PAGE] and [END_PAGE] markers in the MIDDLE of it, return the whole text, with the markers in the middle.
+    
+    // NOTE 5: If the text ends in a ',' or a ';' character, DON'T interchange it for a '.' character, and viceversa.`,
+    //       temperature: 0.2,
+    //       responseMimeType: "application/json",
+    //       responseSchema: {
+    //         type: Type.OBJECT,
+    //         properties: {
+    //           fileId: { type: Type.STRING },
+    //           name: { type: Type.STRING },
+    //           text: { type: Type.STRING },
+    //         },
+    //       }
+    //   }
+    // })
+
+    const parsedResult = response.output_parsed || {
       fileId: '',
       name: '',
       text: '',
@@ -1461,7 +1406,7 @@ IMPORTANT:
     });
 
     const response = await this.openaiClient.responses.parse({
-      model: 'gpt-5-mini-2025-08-07',
+      model: 'gpt-5-nano-2025-08-07',
       input: `User query: ${query}\n\nMessages: ${messages.map(message => `${message.role}: ${message.content}`).join('\n')}\n\n${conversationSummaryText}\n\nFiles' structure summaries: ${fileContents.map(file => `${file.originalName}: ${file.summary}`).join('\n')}`,
       instructions: `Follow these tasks in order:
     

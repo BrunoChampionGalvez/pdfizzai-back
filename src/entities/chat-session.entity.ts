@@ -23,6 +23,12 @@ export class ChatSession {
   @CreateDateColumn()
   created_at: Date;
 
+  @Column({ default: 0 })
+  numRawReferences: number;
+
+  @Column({ default: 0 })
+  numAiGeneratedReferences: number;
+
   @OneToMany('ChatMessage', 'session')
   messages: any[];
 
