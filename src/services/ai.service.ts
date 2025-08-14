@@ -821,8 +821,7 @@ IMPORTANT:
     TASK: Find the most relevant text snippets
     - Extract the most relevant text snippets that directly answers the query from the chunks that you receive (no longer than one sentence per snippet).
 
-    - DO NOT add or remove any characters from the text snippets you are returning, compared to the text in the chunks.
-
+    - DO NOT add or remove any characters from the text snippets you are returning, compared to the text in the chunks. It is EXTREMELY IMPORTANT that the text snippets you are returning don't have any modifications, compared to the text in the chunks; they should be extracted from the chunks exactly as they are.
     INPUT: Query + array of {id, name, text} objects
     OUTPUT: JSON with a filteredTexts property, which is an array of objects with fileId, name, and the extracted text snippet
 
@@ -840,14 +839,16 @@ IMPORTANT:
     
     NOTE 5: If the text ends in a ',' or a ';' character, DON'T interchange it for a '.' character, and viceversa.
     
-    NOTE 6: It is EXTREMELY IMPORTANT that you provide ONLY ONE sentence per text snippet. The most important sentences from the chunks that answer the query properly.`,
+    NOTE 6: It is EXTREMELY IMPORTANT that you provide ONLY ONE sentence per text snippet. The most important sentences from the chunks that answer the query properly.
+    
+    NOTE 7: Only provide each filtered text snippet once, don't repeat the same filtered text snippet multiple times as elements in the returned array.`,
 
       input: `Query: ${question}\n\nChunks: \n${searchDataStr}`,
       text: {
         format: zodTextFormat(responseFormat, "filter_texts")
       },
       reasoning: {
-        effort: 'minimal'
+        effort: 'low'
       }
     })
 

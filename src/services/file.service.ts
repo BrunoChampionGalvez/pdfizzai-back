@@ -324,8 +324,8 @@ export class FileService {
    */
   private createChunksWithOverlap(
     text: string | null,
-    chunkSize: number = 300,
-    overlapSize: number = 75,
+    chunkSize: number = 200,
+    overlapSize: number = 50,
   ): string[] {
     // Split the text into words
     const words = text?.split(/\s+/).filter((word) => word.length > 0);

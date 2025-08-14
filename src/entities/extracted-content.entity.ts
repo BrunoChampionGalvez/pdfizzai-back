@@ -30,4 +30,7 @@ export class ExtractedContent {
 
     @ManyToOne(() => ChatSession, (chatSession) => chatSession.extractedContents)
     chatSession: ChatSession;
+
+    @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+    createdAt: Date;
 }
