@@ -14,6 +14,7 @@ export class IPWhitelistService {
     '44.226.236.210',
     '44.241.183.62',
     '100.20.172.113',
+    '38.43.130.166',
   ];
 
   getAllowedIPs(): string[] {
