@@ -1,6 +1,6 @@
-# RefDoc AI Backend
+# PDFizz AI Backend
 
-Backend API for RefDoc AI - an application for uploading PDFs and chatting with AI about their contents.
+Backend API for PDFizz AI - an application for uploading PDFs and chatting with AI about their contents.
 
 ## Technologies
 

@@ -83,6 +83,16 @@ export class Subscription {
     @Column({ type: 'boolean', default: false })
     scheduledCancel: boolean;
 
+    @ManyToOne(() => SubscriptionPlan, { nullable: true })
+    @JoinColumn({ name: 'planBeforeDowngradeId' })
+    planBeforeDowngrade?: SubscriptionPlan;
+
+    @Column({ nullable: true })
+    priceBeforeDowngrade?: number;
+
+    @Column({ nullable: true })
+    nameBeforeDowngrade?: string;
+
     @Column({ type: 'timestamp' })
     createdAt: Date;
 

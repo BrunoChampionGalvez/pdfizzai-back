@@ -1,6 +1,6 @@
 # OpenAI API Configuration
 
-This document explains how to properly configure the OpenAI API key for the RefDoc AI backend.
+This document explains how to properly configure the OpenAI API key for the PDFizz AI backend.
 
 ## Setup Steps
 

@@ -16,9 +16,6 @@ export class SubscriptionPlan {
     currency: string;
 
     @Column()
-    interval: string; // e.g., 'monthly', 'yearly'
-
-    @Column()
     frequency: number; // e.g., 1 for monthly, 12 for yearly
 
     @Column()
@@ -38,9 +35,15 @@ export class SubscriptionPlan {
 
     @Column({ nullable: true })
     monthlyPaddlePriceId: string; // Paddle price ID for monthly billing
+    
+    @Column({ nullable: true })
+    monthlyPaddlePriceIdWithTrial: string; // Paddle price ID for monthly billing with trial
 
     @Column({ nullable: true })
     yearlyPaddlePriceId: string; // Paddle price ID for yearly billing
+
+    @Column({ nullable: true })
+    yearlyPaddlePriceIdWithTrial: string; // Paddle price ID for yearly billing with trial
 
     @Column({ nullable: true })
     paddleProductId: string; // Paddle product ID

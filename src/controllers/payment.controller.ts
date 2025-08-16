@@ -1,4 +1,4 @@
-import { Controller, Get, NotFoundException, Param, Patch, Put } from "@nestjs/common";
+import { Body, Controller, Get, NotFoundException, Param, Patch, Put } from "@nestjs/common";
 import { AuthToken, Subscription } from "@paddle/paddle-node-sdk";
 import { PaymentService } from "src/services/payment.service";
 import { SubscriptionUsage } from "src/entities/subscription-usage.entity";
@@ -84,6 +84,11 @@ export class PaymentController {
         return subscriptionPlan
     }
 
+    @Get('subscription-plans')
+    async getAllSubscriptionPlans() {
+        return await this.paymentService.getAllSubscriptionPlans();
+    }
+
     @Get('auth-token/customer/:customerId')
     async generateAuthTokenCustomer(
         @Param('customerId') customerId: string
@@ -98,10 +103,11 @@ export class PaymentController {
 
     @Patch('upgrade-subscription/:subscriptionId')
     async upgradeSubscription(
-        @Param('subscriptionId') subscriptionId: string
+        @Param('subscriptionId') subscriptionId: string,
+        @Body() body?: { targetPlan?: string }
     ): Promise<boolean> {
         // Logic to upgrade a subscription
-        const upgradedSubscription = await this.paymentService.upgradeSubscription(subscriptionId);
+        const upgradedSubscription = await this.paymentService.upgradeSubscription(subscriptionId, body?.targetPlan);
         if (!upgradedSubscription) {
             throw new NotFoundException(`Subscription with ID ${subscriptionId} not found`);
         }
@@ -110,10 +116,11 @@ export class PaymentController {
 
     @Patch('downgrade-subscription/:subscriptionId')
     async downgradeSubscription(
-        @Param('subscriptionId') subscriptionId: string
+        @Param('subscriptionId') subscriptionId: string,
+        @Body() body?: { targetPlan?: string }
     ): Promise<boolean> {
         // Logic to downgrade a subscription
-        const downgradedSubscription = await this.paymentService.downgradeSubscription(subscriptionId);
+        const downgradedSubscription = await this.paymentService.downgradeSubscription(subscriptionId, body?.targetPlan);
         if (!downgradedSubscription) {
             throw new NotFoundException(`Subscription with ID ${subscriptionId} not found`);
         }

@@ -101,6 +101,12 @@ export class PaymentService {
         return subscription;
     }
 
+    async getAllSubscriptionPlans(): Promise<SubscriptionPlan[]> {
+        return await this.subscriptionPlanRepository.find({
+            order: { price: 'ASC' } // Order by price ascending
+        });
+    }
+
     async subscriptionCreated(payload: any): Promise<string> {
         const user = await this.userRepository.findOne({
             where: { id: payload.data.custom_data.userId }
@@ -354,7 +360,7 @@ export class PaymentService {
         }
     }
 
-    async upgradeSubscription(subscriptionId: string | undefined): Promise<boolean> {
+    async upgradeSubscription(subscriptionId: string | undefined, targetPlan?: string): Promise<boolean> {
         if (!subscriptionId) {
             throw new NotFoundException('Subscription ID is required for upgrade');
         }
@@ -368,12 +374,29 @@ export class PaymentService {
             throw new NotFoundException('Subscription not found');
         }
 
-        const proPlan = await this.subscriptionPlanRepository.findOne({
-            where: { name: 'pro' }
+        // Determine target plan based on current plan and optional targetPlan parameter
+        const currentPlanName = subscription.plan?.name || 'starter';
+        let targetPlanName: string;
+        
+        if (currentPlanName === 'starter') {
+            // Allow Starter users to upgrade to either Pro or Plus
+            if (targetPlan === 'plus') {
+                targetPlanName = 'plus';
+            } else {
+                targetPlanName = 'pro'; // Default to Pro if no target specified
+            }
+        } else if (currentPlanName === 'pro') {
+            targetPlanName = 'plus';
+        } else {
+            throw new NotFoundException(`Cannot upgrade from ${currentPlanName} plan`);
+        }
+
+        const targetPlanEntity = await this.subscriptionPlanRepository.findOne({
+            where: { name: targetPlanName }
         });
 
-        if (!proPlan) {
-            throw new NotFoundException('Pro plan not found');
+        if (!targetPlanEntity) {
+            throw new NotFoundException(`${targetPlanName.charAt(0).toUpperCase() + targetPlanName.slice(1)} plan not found`);
         }
 
         // Update scheduled change
@@ -386,7 +409,7 @@ export class PaymentService {
             prorationBillingMode: 'full_immediately', // Ensure immediate proration
             items: [
                 {
-                    priceId: subscription?.interval === 'month' ? proPlan.monthlyPaddlePriceId : proPlan.yearlyPaddlePriceId,
+                    priceId: subscription?.interval === 'month' ? targetPlanEntity.monthlyPaddlePriceId : targetPlanEntity.yearlyPaddlePriceId,
                     quantity: 1,
                 }
             ],
@@ -398,8 +421,8 @@ export class PaymentService {
             prorationBillingMode: 'do_not_bill', // Ensure no proration
         });
 
-        subscription.paddleProductId = proPlan?.paddleProductId || 'Error: Pro plan not found';
-        subscription.plan = proPlan;
+        subscription.paddleProductId = targetPlanEntity?.paddleProductId || `Error: ${targetPlanName} plan not found`;
+        subscription.plan = targetPlanEntity;
         subscription.scheduledCancel = false; // Reset scheduled cancel if upgrading
         subscription.hasFullAccess = true; // Assume upgrade grants full access
 
@@ -410,24 +433,24 @@ export class PaymentService {
         const subscriptionUsage = await this.subscriptionUsageRepository.findOne({
             where: { subscription: { id: subscription.id } }
         });
-        const starterPlan = await this.subscriptionPlanRepository.findOne({
-            where: { name: 'starter' }
+        const currentPlan = await this.subscriptionPlanRepository.findOne({
+            where: { name: currentPlanName }
         });
-        if (!subscriptionUsage || !starterPlan) {
-            throw new NotFoundException('Subscription usage or starter plan not found');
+        if (!subscriptionUsage || !currentPlan) {
+            throw new NotFoundException('Subscription usage or current plan not found');
         }
-        const messagesLeftBeforeUpgrade = subscriptionUsage ? starterPlan?.messagesLimit - subscriptionUsage.messagesUsed : 0;
-        const filePagesLeftBeforeUpgrade = subscriptionUsage ? starterPlan?.filePagesLimit - subscriptionUsage.filePagesUploaded : 0;
+        const messagesLeftBeforeUpgrade = subscriptionUsage ? currentPlan?.messagesLimit - subscriptionUsage.messagesUsed : 0;
+        const filePagesLeftBeforeUpgrade = subscriptionUsage ? currentPlan?.filePagesLimit - subscriptionUsage.filePagesUploaded : 0;
         subscription.messagesLeftBeforeUpgrade = messagesLeftBeforeUpgrade;
         subscription.filePagesLeftBeforeUpgrade = filePagesLeftBeforeUpgrade;
-        subscription.price = proPlan.price;
-        subscription.name = proPlan.name;
+        subscription.price = targetPlanEntity.price;
+        subscription.name = targetPlanEntity.name;
         await this.subscriptionRepository.save(subscription);
 
         return true;
     }
 
-    async downgradeSubscription(subscriptionId: string | undefined): Promise<boolean> {
+    async downgradeSubscription(subscriptionId: string | undefined, targetPlan?: string): Promise<boolean> {
         if (!subscriptionId) {
             throw new NotFoundException('Subscription ID is required for downgrade');
         }
@@ -441,12 +464,36 @@ export class PaymentService {
             throw new NotFoundException('Subscription not found');
         }
 
-        const starterPlan = await this.subscriptionPlanRepository.findOne({
-            where: { name: 'starter' }
+        // Determine target plan based on current plan and targetPlan parameter
+        const currentPlanName = subscription.plan?.name || 'pro';
+        let targetPlanName: string;
+        
+        if (targetPlan) {
+            // Validate that the target plan is a valid downgrade
+            if (currentPlanName === 'plus' && (targetPlan === 'pro' || targetPlan === 'starter')) {
+                targetPlanName = targetPlan;
+            } else if (currentPlanName === 'pro' && targetPlan === 'starter') {
+                targetPlanName = targetPlan;
+            } else {
+                throw new NotFoundException(`Cannot downgrade from ${currentPlanName} to ${targetPlan} plan`);
+            }
+        } else {
+            // Default behavior: linear downgrade
+            if (currentPlanName === 'pro') {
+                targetPlanName = 'starter';
+            } else if (currentPlanName === 'plus') {
+                targetPlanName = 'pro';
+            } else {
+                throw new NotFoundException(`Cannot downgrade from ${currentPlanName} plan`);
+            }
+        }
+
+        const targetPlanEntity = await this.subscriptionPlanRepository.findOne({
+            where: { name: targetPlanName }
         });
 
-        if (!starterPlan) {
-            throw new NotFoundException('Starter plan not found');
+        if (!targetPlanEntity) {
+            throw new NotFoundException(`${targetPlanName.charAt(0).toUpperCase() + targetPlanName.slice(1)} plan not found`);
         }
 
         // Update scheduled change
@@ -458,17 +505,25 @@ export class PaymentService {
         await this.paddle.subscriptions.update(subscriptionId, {
             items: [
                 {
-                    priceId: subscription?.interval === 'month' ? starterPlan.monthlyPaddlePriceId : starterPlan.yearlyPaddlePriceId,
+                    priceId: subscription?.interval === 'month' ? targetPlanEntity.monthlyPaddlePriceId : targetPlanEntity.yearlyPaddlePriceId,
                     quantity: 1,
                 },
             ], // Replace with actual new plan ID
             prorationBillingMode: 'do_not_bill', // Ensure no proration
         });
 
+        // Store original plan information before downgrade
+        subscription.planBeforeDowngrade = subscription.plan;
+        subscription.priceBeforeDowngrade = subscription.plan?.price;
+        subscription.nameBeforeDowngrade = subscription.plan?.name;
+
         subscription.hasDowngraded = true; // Mark as downgraded
-        subscription.paddleProductId = starterPlan?.paddleProductId || 'Error: Starter plan not found';
+        subscription.paddleProductId = targetPlanEntity?.paddleProductId || `Error: ${targetPlanName} plan not found`;
+        subscription.plan = targetPlanEntity;
         subscription.scheduledCancel = false; // Reset scheduled cancel if downgrading
         subscription.hasFullAccess = true; // Assume downgrade still grants full access
+        subscription.price = targetPlanEntity.price;
+        subscription.name = targetPlanEntity.name;
         await this.subscriptionRepository.save(subscription);
 
         return true;
@@ -550,16 +605,30 @@ export class PaymentService {
 
         const subscription = await this.subscriptionRepository.findOne({
             where: { paddleSubscriptionId: subscriptionId },
-            relations: ['plan']
+            relations: ['plan', 'planBeforeDowngrade']
         });
 
         if (!subscription) {
             throw new NotFoundException('Subscription not found');
         }
 
-        // Cancel the downgrade
+        // Restore original plan if available
+        if (subscription.planBeforeDowngrade) {
+            subscription.plan = subscription.planBeforeDowngrade;
+            if (subscription.priceBeforeDowngrade !== undefined) {
+                subscription.price = subscription.priceBeforeDowngrade;
+            }
+            if (subscription.nameBeforeDowngrade !== undefined) {
+                subscription.name = subscription.nameBeforeDowngrade;
+            }
+        }
+
+        // Cancel the downgrade and clear stored original plan info
         subscription.hasDowngraded = false; // Reset downgrade status
         subscription.scheduledCancel = false; // Reset scheduled cancel if canceling downgrade
+        subscription.planBeforeDowngrade = undefined;
+        subscription.priceBeforeDowngrade = undefined;
+        subscription.nameBeforeDowngrade = undefined;
         await this.subscriptionRepository.save(subscription);
 
         return true;
