@@ -238,7 +238,7 @@ export class ChatController {
     @Param('rawRefId') rawRefId: string,
     @Query('sessionId') sessionId: string,
     @Req() req: Request & { user: { userId: string } },
-  ): Promise<{ fileId: string; text: string; fileName: string }> {
+  ): Promise<{ id: string; fileId: string; text: string; fileName: string }> {
     try {
       console.log(
         `Getting extracted content for rawRefId ${rawRefId}, session ${sessionId}, for user ${req.user.userId}`,
@@ -249,6 +249,7 @@ export class ChatController {
         sessionId,
       );
       return {
+        id: extractedContent.id,
         fileId: extractedContent.fileId,
         text: extractedContent.text,
         fileName: extractedContent.fileName,

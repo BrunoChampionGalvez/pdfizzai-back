@@ -899,17 +899,21 @@ export class ChatService {
       const response = await this.aiService.loadReferenceAgain(textToSearch, oldChatMessage.rawExtractedContents || []);
       console.log('AI search response: ' + response);
       // Escape newlines in textToSearch for literal replacement
-      const escapedTextToSearch = textToSearch.replace(/\n/g, '\\n');
       const escapedResponse = response.replace(/\n/g, '\\n');
-      const newChatMessage = chatMessage.replace(
-        escapedTextToSearch,
-        escapedResponse, // Replace the original text with the AI's response
-      );
-      const updatedMessage = await this.chatMessageRepository.save({
-        id: chatMessageId,
-        content: newChatMessage,
-      });
-      return updatedMessage.content;
+
+      const reference = await this.extractedContentRepository.findOne({
+        where: { id: referenceId },
+      })
+
+      if (!reference) {
+        throw new NotFoundException('Extracted content with ID ' + referenceId + ' not found');
+      }
+
+      await this.extractedContentRepository.update(referenceId, {
+        text: escapedResponse,
+      })
+
+      return escapedResponse;
     } catch (error: unknown) {
       console.error('Error searching reference:', error);
       let errorMessage = 'Unknown error during reference search';
