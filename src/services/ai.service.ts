@@ -590,7 +590,6 @@ IMPORTANT:
         input: prompt,
         instructions:
             'You are a file title extractor. Extract the title from the text that you receive, that was originally extracted from a file. Return ONLY the title text, nothing else. You will receive 1/4 of the text of the file, so you must focus on detecting the title of the original file from only that portion of the text that you receive.',
-          temperature: 0.2,
         });
       const name = result.output_text;
 
@@ -772,7 +771,6 @@ IMPORTANT:
       model: 'gpt-5-nano-2025-08-07',
       input: `${messages.map(m => `${m.role}: ${m.content}`).join('\n')}`,
       instructions: `You are a conversation summary generator. You will receive a conversation history. Generate a concise summary of that conversation. Return ONLY the summary text, nothing else. The summary should be around 10% to 15% long of the original conversation. You must include the user's intent that the user had in the messages provided of the conversation. This summary will then be passed to an AI so that it has context of what the user has asked and of what another AI has responded.`,
-      temperature: 0.2,
     });
 
     let result = response.output_text;
