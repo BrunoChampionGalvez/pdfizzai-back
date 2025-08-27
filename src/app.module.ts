@@ -24,7 +24,6 @@ import { FolderService } from './services/folder.service';
 import { FileService } from './services/file.service';
 import { ChatService } from './services/chat.service';
 import { AIService } from './services/ai.service';
-import { IPWhitelistService } from './services/ip-whitelist.service';
 
 // Controllers
 import { AuthController } from './controllers/auth.controller';
@@ -40,7 +39,6 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 // Middleware
-import { IPWhitelistMiddleware } from './middleware/ip-whitelist.middleware';
 import { LoggingMiddleware } from './middleware/logging.middleware';
 import { WebhooksService } from './services/webhooks.service';
 
@@ -106,7 +104,6 @@ import { RawExtractedContent } from './entities/raw-extracted-contents';
     ChatService,
     JwtStrategy,
     AIService,
-    IPWhitelistService,
     WebhooksService,
     PaymentService,
     {
@@ -124,9 +121,5 @@ export class AppModule implements NestModule {
     consumer
       .apply(LoggingMiddleware)
       .forRoutes('*'); // Apply logging to all routes first
-    
-    consumer
-      .apply(IPWhitelistMiddleware)
-      .forRoutes('*'); // Apply to all routes
   }
 }
