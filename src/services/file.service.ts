@@ -1,11 +1,7 @@
-import { Injectable, ForbiddenException, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { File } from '../entities/file.entity';
-import * as path from 'path';
-import * as fs from 'fs';
-import { v4 as uuidv4 } from 'uuid';
-import axios from 'axios';
 import { ConfigService } from '@nestjs/config';
 import { AIService } from './ai.service';
 import { Pinecone } from '@pinecone-database/pinecone';
@@ -13,11 +9,10 @@ import { ChatSession, Folder } from 'src/entities';
 import { Storage } from '@google-cloud/storage';
 import { SubscriptionUsage } from 'src/entities/subscription-usage.entity';
 import { ExtractedContent } from 'src/entities/extracted-content.entity';
-import { extractTextFromPDFBuffer, getPDFPageCount } from '../utils/pdf-text-extractor';
+import { extractTextAndPageCountFromPDFBuffer } from '../utils/pdf-text-extractor';
 
 @Injectable()
 export class FileService {
-  private readonly uploadPath = path.join(process.cwd(), 'uploads');
   private pc: Pinecone;
   private googleStorage: Storage;
 
@@ -33,10 +28,6 @@ export class FileService {
     @InjectRepository(ChatSession)
     private chatSessionRepository: Repository<ChatSession>,
   ) {
-    // Ensure upload directory exists
-    if (!fs.existsSync(this.uploadPath)) {
-      fs.mkdirSync(this.uploadPath, { recursive: true });
-    }
     this.pc = new Pinecone({
       apiKey: this.configService.get('PINECONE_API_KEY') as string,
     });
@@ -87,41 +78,19 @@ export class FileService {
       throw new BadRequestException('Course size limit of 100MB exceeded');
     }
     
-    // Store the file on disk and create a physical path
-    const uploadsDir = 'uploads';
-    // Ensure the uploads directory exists
-    if (!fs.existsSync(uploadsDir)) {
-      fs.mkdirSync(uploadsDir, { recursive: true });
-    }
-    const filePath = `${userId}_${Date.now()}_${fileData.originalname}`;
-    fs.writeFileSync(filePath, fileData.buffer);
-    const virtualPath = filePath;
-
+    // Upload directly to Google Cloud Storage (no local disk I/O)
+    const objectName = `${userId}_${Date.now()}_${fileData.originalname}`;
+    const virtualPath = objectName;
     try {
-      const response = await this.googleStorage.bucket(this.configService.get('GCS_BUCKET_NAME') as string).upload(virtualPath);
-      console.log('File uploaded to Google Cloud Storage:', response);
+      const bucket = this.googleStorage.bucket(this.configService.get('GCS_BUCKET_NAME') as string);
+      const gcsFile = bucket.file(objectName);
+      await gcsFile.save(fileData.buffer, {
+        metadata: { contentType: fileData.mimetype },
+      });
+      console.log('File uploaded to Google Cloud Storage:', { name: objectName, size: fileData.size });
     } catch (error) {
       console.error('Error uploading file to Google Cloud Storage:', error);
       throw new BadRequestException('Failed to upload file to cloud storage');
-    }
-
-    // Upload the file to Google Cloud Storage
-    /*await axios.post(
-      `https://storage.googleapis.com/upload/storage/v1/b/${this.configService.get('GCS_BUCKET_NAME')}/o?uploadType=media&name=${encodeURIComponent(virtualPath)}`,
-      fileData.buffer, // send the binary data directly
-      {
-      headers: {
-        'Authorization': `Bearer ${this.configService.get('GCS_ACCESS_TOKEN')}`,
-        'Content-Type': fileData.mimetype,
-      },
-      },
-    );*/
-
-    // Delete the file from the uploads directory after upload
-    try {
-      fs.unlinkSync(filePath);
-    } catch (err) {
-      console.error(`Failed to delete local file ${filePath}:`, err);
     }
 
     // Create file entity
@@ -148,9 +117,7 @@ export class FileService {
       try {
         console.log('Extracting text from PDF during upload...');
         
-        // Extract text from PDF buffer
-        const extractedText = await extractTextFromPDFBuffer(fileData.buffer);
-        const totalPages = await getPDFPageCount(fileData.buffer);
+        const { text: extractedText, totalPages } = await extractTextAndPageCountFromPDFBuffer(fileData.buffer);
         
         console.log(`Extracted ${extractedText.length} characters from ${totalPages} pages`);
         
@@ -253,29 +220,16 @@ export class FileService {
 
     const chunks = this.createChunksWithOverlap(textByPages);
 
-    // Create file name with AI
     const quarterLength = Math.floor(textByPages.length / 4);
-    const fileName = await this.aiService.generateFileName(
-      textByPages.slice(0, quarterLength),
-    );
-
-    // Generate summary
     const summary = await this.aiService.generateStructuredSummary(textByPages);
-
-    // Generate specific questions for user generic queries
-    const descriptionAndQuestions = await this.aiService.generateQuestionsFromFile(
-      textByPages,
-    );
 
     // Update the paper with extracted text and mark as extracted
     let updatedPaper = await this.fileRepository.save({
       ...paper,
-      description: descriptionAndQuestions.description ? descriptionAndQuestions.description : '',
-      questions: descriptionAndQuestions.questions && descriptionAndQuestions.questions.length > 0 ? descriptionAndQuestions.questions : [],
       textByPages,
       //summary,
       chunks,
-      filename: fileName,
+      filename: paper.filename || 'Unknown', // Ensure filename is set
       processed: true, // Mark as processed since we've extracted the content
       textExtracted: true,
       totalPages,
@@ -307,7 +261,7 @@ export class FileService {
         _id: `${id}-${index}`,
         chunk_text: chunk.replace(/\n/g, ''),
         fileId: id,
-        name: fileName,
+        name: paper.originalName,
         userId: userId, // Include userId for better context
       })),
     );

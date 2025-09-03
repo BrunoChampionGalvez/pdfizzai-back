@@ -548,7 +548,7 @@ IMPORTANT:
         model: 'gpt-5-nano-2025-08-07',
         input: prompt,
         instructions:
-          `You are an structured summary generator. You will receive the extracted text from a file. Generate a structured summary of that text. Return ONLY the structured summary text, nothing else. It should contain the main sections and secondary sections distributed in the order they appear in the file. Each section should have it's short description (make it concise).
+          `You are an structured summary generator. You will receive the extracted text from a file. Generate a structured summary of that text. Return ONLY the structured summary text, nothing else. It should contain the main sections and secondary sections distributed in the order they appear in the file. Each section should have it's short summary.
 
 
           Example: Research study
@@ -561,9 +561,12 @@ IMPORTANT:
 
           In this example you can see only main sections, but if the file is substantially larger, provide the secondary sections inside the main sections as well.
 
-          Remember keeping the descriptions short. They should be enough to convey the main point of the section. But must not be larger than around 75 words.
+          The summaries of the sections should be long enough to convey the main points of the section. But must not be too large.
           
           Note: This structured summary will be used to later retrieve information from the file by generating questions, so it should be tailored for this purpose.`,
+          reasoning: {
+            effort: 'minimal'
+          }
       });
       const summary = result.output_text;
 
