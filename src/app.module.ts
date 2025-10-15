@@ -68,7 +68,7 @@ import { RawExtractedContent } from './entities/raw-extracted-contents';
         database: configService.get('DB_NAME', 'refery_ai'),
         entities: [User, Folder, File, ChatSession, ChatMessage, Subscription, Transaction, SubscriptionUsage, SubscriptionPlan, ExtractedContent, RawExtractedContent],
         synchronize: true,
-        dropSchema: true,
+        dropSchema: false,
       }),
       inject: [ConfigService],
     }),
