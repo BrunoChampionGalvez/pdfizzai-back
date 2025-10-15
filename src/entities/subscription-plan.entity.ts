@@ -9,8 +9,8 @@ export class SubscriptionPlan {
     @Column()
     name: string;
 
-    @Column()
-    price: number;
+    @Column({ type: 'int' })
+    price: number; // Price in cents
 
     @Column()
     currency: string;

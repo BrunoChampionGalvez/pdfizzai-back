@@ -6,6 +6,7 @@ import { ValidationPipe, Logger } from '@nestjs/common';
 import { AppModule } from './app.module';
 import * as cookieParser from 'cookie-parser';
 import helmet from 'helmet';
+import { SeedService } from './services/seed.service';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -37,6 +38,14 @@ async function bootstrap() {
     forbidNonWhitelisted: true,
     transform: true,
   }));
+
+  // Run database seeder
+  try {
+    const seedService = app.get(SeedService);
+    await seedService.seedDatabase();
+  } catch (error) {
+    logger.error('Failed to seed database:', error);
+  }
 
   const port = process.env.PORT || 3001;
   await app.listen(port);

@@ -24,6 +24,7 @@ import { FolderService } from './services/folder.service';
 import { FileService } from './services/file.service';
 import { ChatService } from './services/chat.service';
 import { AIService } from './services/ai.service';
+import { SeedService } from './services/seed.service';
 
 // Controllers
 import { AuthController } from './controllers/auth.controller';
@@ -31,12 +32,10 @@ import { FolderController } from './controllers/folder.controller';
 import { FileController } from './controllers/files.controller';
 import { ChatController } from './controllers/chat.controller';
 import { WebhooksController } from './controllers/webhooks.controller';
+import { SeedController } from './controllers/seed.controller';
 
 // Strategies
 import { JwtStrategy } from './strategies/jwt.strategy';
-
-// Guards
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 // Middleware
 import { LoggingMiddleware } from './middleware/logging.middleware';
@@ -96,6 +95,7 @@ import { RawExtractedContent } from './entities/raw-extracted-contents';
     ChatController,
     WebhooksController,
     PaymentController,
+    SeedController,
   ],
   providers: [
     AuthService,
@@ -106,6 +106,7 @@ import { RawExtractedContent } from './entities/raw-extracted-contents';
     AIService,
     WebhooksService,
     PaymentService,
+    SeedService,
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
