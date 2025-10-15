@@ -23,10 +23,30 @@ async function bootstrap() {
   // Security
   app.use(helmet());
   
-  // CORS configuration - simplified since IP whitelisting is handled by middleware
+  // CORS configuration - Allow multiple origins
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'https://pdfizzai.vercel.app',
+    'https://www.pdfizzai.vercel.app',
+    process.env.FRONTEND_URL,
+  ].filter(Boolean); // Remove undefined values
+
   app.enableCors({
-    origin: ['http://localhost:3000', process.env.FRONTEND_URL],
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, Postman, etc.)
+      if (!origin) return callback(null, true);
+      
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        logger.warn(`CORS blocked request from origin: ${origin}`);
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Cookie'],
+    exposedHeaders: ['Set-Cookie'],
   });
 
   // Cookie parser
