@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, OnModuleInit, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { File } from '../entities/file.entity';
@@ -10,11 +10,14 @@ import { Storage } from '@google-cloud/storage';
 import { SubscriptionUsage } from 'src/entities/subscription-usage.entity';
 import { ExtractedContent } from 'src/entities/extracted-content.entity';
 import { extractTextAndPageCountFromPDFBuffer } from '../utils/pdf-text-extractor';
+import { getSecret } from '@aws-lambda-powertools/parameters/secrets';
 
 @Injectable()
-export class FileService {
+export class FileService implements OnModuleInit {
+  private readonly logger = new Logger(FileService.name);
   private pc: Pinecone;
   private googleStorage: Storage;
+  private gcsInitialized = false;
 
   constructor(
     private configService: ConfigService,
@@ -31,14 +34,45 @@ export class FileService {
     this.pc = new Pinecone({
       apiKey: this.configService.get('PINECONE_API_KEY') as string,
     });
-    console.log('GCS_API_KEY', this.configService.get('GCS_API_KEY') ? 'Present' : 'Not Present');
+  }
 
-    const buffer = Buffer.from(this.configService.get('GCS_SERVICE_ACCOUNT_ENCODED'), 'base64')
-    const credentials = JSON.parse(buffer.toString('utf-8'))
-    
-    this.googleStorage = new Storage({
-      credentials,
-    });
+  async onModuleInit() {
+    await this.initializeGoogleStorage();
+  }
+
+  private async initializeGoogleStorage() {
+    if (this.gcsInitialized) {
+      return;
+    }
+
+    try {
+      const gcsSecretArn = this.configService.get('GCS_SECRET_ARN');
+      
+      if (!gcsSecretArn) {
+        throw new Error('GCS_SECRET_ARN environment variable is required');
+      }
+
+      this.logger.log('Retrieving GCS credentials from AWS Secrets Manager...');
+      
+      // Obtener el secret de AWS Secrets Manager con caché de 5 minutos
+      const gcsCredentials = await getSecret(gcsSecretArn, {
+        transform: 'json',  // Parse automático a JSON
+        maxAge: 300         // Cache de 5 minutos (300 segundos)
+      });
+
+      this.logger.log('Successfully retrieved GCS credentials from Secrets Manager');
+
+      // Inicializar Google Cloud Storage con las credenciales del secret
+      this.googleStorage = new Storage({
+        credentials: gcsCredentials as any,
+      });
+
+      this.gcsInitialized = true;
+      this.logger.log('Google Cloud Storage initialized successfully');
+    } catch (error) {
+      this.logger.error('Failed to initialize Google Cloud Storage:', error);
+      throw error;
+    }
   }
 
   async findOne(id: string): Promise<File> {

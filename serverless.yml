@@ -1,0 +1,144 @@
+# "org" ensures this Service is used with the correct Serverless Framework Access Key.
+org: brunochampion
+# "app" enables Serverless Framework Dashboard features and sharing them with other Services.
+app: pdfizz-ai
+# "service" is the name of this project. This will also be added to your AWS resource names.
+service: pdfizz-ai
+
+# Habilitar carga de archivos .env
+# Con esto Serverless Framework cargará .env y .env.[stage] automáticamente
+useDotenv: true
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  memorySize: 1024
+  timeout: 30
+  # Uncomment to easily set up a custom domain. Read the docs for more details:
+  # https://www.serverless.com/framework/docs/providers/aws/guide/domains
+  # domain: api.example.com
+  
+  # Permisos IAM para acceder a AWS Secrets Manager
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - secretsmanager:GetSecretValue
+          Resource: ${env:GCS_SECRET_ARN}
+  
+  environment:
+    NODE_ENV: ${env:NODE_ENV}
+    DATABASE_URL: ${env:DATABASE_URL}
+    JWT_SECRET: ${env:JWT_SECRET}
+    FRONTEND_URL: ${env:FRONTEND_URL}
+    OPENAI_API_KEY: ${env:OPENAI_API_KEY}
+    GEMINI_API_KEY: ${env:GEMINI_API_KEY}
+    GCS_SECRET_ARN: ${env:GCS_SECRET_ARN}
+    PINECONE_API_KEY: ${env:PINECONE_API_KEY}
+    PINECONE_INDEX_NAME: ${env:PINECONE_INDEX_NAME}
+    PINECONE_INDEX_HOST: ${env:PINECONE_INDEX_HOST}
+    PADDLE_API_KEY: ${env:PADDLE_API_KEY}
+
+# Configuración de ESBuild nativo de Serverless Framework V4
+build:
+  esbuild:
+    # Habilitar bundling
+    bundle: true
+    
+    # Habilitar minificación para reducir tamaño
+    minify: true
+    
+    # Deshabilitar sourcemaps para producción
+    sourcemap: false
+    
+    # Concurrencia para builds paralelos
+    buildConcurrency: 10
+    
+    # Estrategia optimizada: Mantener como external solo las dependencias necesarias
+    # - Módulos nativos (bcrypt, pg)
+    # - Frameworks con decoradores/metadata (NestJS, TypeORM, class-validator/transformer)
+    # - SDKs grandes (@google-cloud/storage, openai, @pinecone-database, etc.)
+    # - Dependencias con dynamic imports (pdfjs-dist)
+    # Total estimado: ~118 MB (115 MB external + 2 MB bundled + 1 MB dist)
+    external:
+      # Módulos nativos (binarios compilados)
+      - 'bcrypt'
+      - 'pg'
+      
+      # PDF.js con workers y dynamic imports
+      - 'pdfjs-dist'
+      
+      # NestJS framework (decoradores y reflection)
+      - '@nestjs/common'
+      - '@nestjs/core'
+      - '@nestjs/platform-express'
+      - '@nestjs/typeorm'
+      - '@nestjs/config'
+      - '@nestjs/jwt'
+      - '@nestjs/passport'
+      - '@nestjs/schedule'
+      - '@nestjs/swagger'
+      - '@nestjs/throttler'
+      
+      # TypeORM y reflection
+      - 'typeorm'
+      - 'reflect-metadata'
+      - 'class-transformer'
+      - 'class-validator'
+      
+      # SDKs externos grandes
+      - '@google-cloud/storage'
+      - '@google/genai'
+      - '@pinecone-database/pinecone'
+      - '@paddle/paddle-node-sdk'
+      - 'openai'
+      
+      # AWS Powertools
+      - '@aws-lambda-powertools/parameters'
+      
+      # Utilidades de servidor y middleware
+      - 'serverless-http'
+      - 'multer'
+      - 'passport'
+      - 'passport-jwt'
+      - 'passport-local'
+      - 'rxjs'
+      - 'cookie-parser'
+      - 'cors'
+      - 'helmet'
+    
+    # Excluir completamente (no bundlear ni incluir en el paquete)
+    exclude:
+      - '@aws-sdk/*'  # AWS SDK v3 ya está disponible en Lambda
+      - '@nestjs/cli'
+      - '@types/*'
+
+package:
+  patterns:
+    # Excluir archivos innecesarios
+    - '!src/**'
+    - '!test/**'
+    - '!uploads/**'
+    - '!*.pdf'
+    - '!.env*'
+    - '!.git/**'
+    - '!.vscode/**'
+    - '!README*.md'
+    - '!*.config.*'
+    - '!tsconfig*.json'
+    - '!nest-cli.json'
+    - '!eslint.config.mjs'
+    
+    # Incluir lo necesario
+    - 'handler.js'
+    - 'package.json'
+    - 'package-lock.json'
+    - 'dist/**'  # Código compilado de NestJS
+
+functions:
+  api:
+    handler: handler.handler
+    events:
+      - httpApi: "*"

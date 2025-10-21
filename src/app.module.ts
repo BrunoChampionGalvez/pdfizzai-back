@@ -59,17 +59,24 @@ import { RawExtractedContent } from './entities/raw-extracted-contents';
     }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get('DB_HOST', 'localhost'),
-        port: configService.get('DB_PORT', 5432),
-        username: configService.get('DB_USERNAME', 'postgres'),
-        password: configService.get('DB_PASSWORD', 'password'),
-        database: configService.get('DB_NAME', 'refery_ai'),
-        entities: [User, Folder, File, ChatSession, ChatMessage, Subscription, Transaction, SubscriptionUsage, SubscriptionPlan, ExtractedContent, RawExtractedContent],
-        synchronize: true,
-        dropSchema: false,
-      }),
+      useFactory: (configService: ConfigService) => {
+        const databaseUrl = configService.get('DATABASE_URL');
+        
+        if (!databaseUrl) {
+          throw new Error('DATABASE_URL environment variable is required');
+        }
+        
+        return {
+          type: 'postgres',
+          url: databaseUrl,
+          entities: [User, Folder, File, ChatSession, ChatMessage, Subscription, Transaction, SubscriptionUsage, SubscriptionPlan, ExtractedContent, RawExtractedContent],
+          synchronize: true,
+          dropSchema: false,
+          ssl: {
+            rejectUnauthorized: false, // Necesario para conexiones remotas (RDS, Neon, etc.)
+          },
+        };
+      },
       inject: [ConfigService],
     }),
     TypeOrmModule.forFeature([User, Folder, File, ChatSession, ChatMessage, Subscription, Transaction, SubscriptionUsage, SubscriptionPlan, ExtractedContent, RawExtractedContent]),
