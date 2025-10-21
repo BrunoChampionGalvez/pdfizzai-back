@@ -55,16 +55,26 @@ export class FileService implements OnModuleInit {
       this.logger.log('Retrieving GCS credentials from AWS Secrets Manager...');
       
       // Obtener el secret de AWS Secrets Manager con caché de 5 minutos
-      const gcsCredentials = await getSecret(gcsSecretArn, {
+      const secretData = await getSecret(gcsSecretArn, {
         transform: 'json',  // Parse automático a JSON
         maxAge: 300         // Cache de 5 minutos (300 segundos)
-      });
+      }) as any;
 
       this.logger.log('Successfully retrieved GCS credentials from Secrets Manager');
 
-      // Inicializar Google Cloud Storage con las credenciales del secret
+      // Decodificar las credenciales de la service account desde Base64
+      const serviceAccountJson = Buffer.from(
+        secretData.GCS_SERVICE_ACCOUNT_ENCODED, 
+        'base64'
+      ).toString('utf-8');
+
+      const serviceAccountCredentials = JSON.parse(serviceAccountJson);
+
+      this.logger.log('Service account credentials decoded successfully');
+
+      // Inicializar Google Cloud Storage con las credenciales decodificadas
       this.googleStorage = new Storage({
-        credentials: gcsCredentials as any,
+        credentials: serviceAccountCredentials,
       });
 
       this.gcsInitialized = true;

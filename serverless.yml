@@ -40,6 +40,8 @@ provider:
     PINECONE_INDEX_NAME: ${env:PINECONE_INDEX_NAME}
     PINECONE_INDEX_HOST: ${env:PINECONE_INDEX_HOST}
     PADDLE_API_KEY: ${env:PADDLE_API_KEY}
+    GCS_BUCKET_NAME: ${env:GCS_BUCKET_NAME}
+    GCS_PROJECT_ID: ${env:GCS_PROJECT_ID}
 
 # Configuración de ESBuild nativo de Serverless Framework V4
 build:
